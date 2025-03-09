@@ -13,6 +13,80 @@ const program = new Command();
 const { cosmiconfig } = require('cosmiconfig');
 const dependencyTree = require('dependency-tree');
 const madge = require('madge');
+const yaml = require('js-yaml');
+const glob = require('glob');
+const fsSync = require('fs');
+
+// Ensure policies directory exists
+if (!fsSync.existsSync('policies')) {
+  fsSync.mkdirSync('policies');
+}
+
+const defaultPolicy = {
+  name: "New Policy",
+  version: "1.0.0",
+  description: "A new dependency management policy",
+  extends: [],
+  rules: {
+    licenses: {
+      allowed: ["MIT", "ISC", "Apache-2.0", "BSD-3-Clause"],
+      forbidden: ["GPL", "AGPL"],
+      unknown: "warn"
+    },
+    security: {
+      maxSeverity: "moderate",
+      autofix: false,
+      exceptions: []
+    },
+    versioning: {
+      maxAge: "6 months",
+      allowMajorUpdates: false,
+      autoMerge: {
+        patch: true,
+        minor: false,
+        major: false
+      }
+    },
+    dependencies: {
+      maxDirect: 150,
+      maxDepth: 10,
+      bannedPackages: [],
+      requiredPackages: [],
+      duplicatesAllowed: false
+    }
+  },
+  notifications: {
+    slack: false,
+    email: false,
+    githubIssues: true
+  },
+  documentation: {
+    required: true,
+    template: "default"
+  }
+};
+
+function deepMerge(target, source) {
+  if (typeof source !== 'object' || source === null) {
+    return source;
+  }
+  
+  const output = { ...target };
+  
+  Object.keys(source).forEach(key => {
+    if (typeof source[key] === 'object' && source[key] !== null) {
+      if (!(key in target)) {
+        output[key] = source[key];
+      } else {
+        output[key] = deepMerge(target[key], source[key]);
+      }
+    } else {
+      output[key] = source[key];
+    }
+  });
+  
+  return output;
+}
 
 program
   .name('dependency-guardian')
@@ -568,9 +642,38 @@ program
   .option('-o, --output <file>', 'output file path')
   .option('-c, --config <path>', 'path to config file')
   .option('-a, --advanced', 'perform advanced dependency analysis', false)
+  .option('-P, --policy <name>', 'policy to use for scanning')
   .action(async (options) => {
     try {
-      const config = await loadConfig(options.config);
+      let config = await loadConfig(options.config);
+      
+      if (options.policy) {
+        const policyFiles = glob.sync('policies/**/*.{json,yaml,yml}');
+        const policies = await loadPolicies(policyFiles);
+        const resolvedPolicies = await resolvePolicyInheritance(policies);
+        
+        const policy = resolvedPolicies.get(options.policy);
+        if (!policy) {
+          console.error(chalk.red(`Policy "${options.policy}" not found`));
+          process.exit(1);
+        }
+        
+        // Merge policy with config
+        config = deepMerge(config, {
+          allowedLicenses: policy.rules.licenses.allowed,
+          rules: {
+            dependencies: {
+              maxAge: policy.rules.versioning.maxAge,
+              forbiddenLicenses: policy.rules.licenses.forbidden,
+              requireLicense: policy.rules.licenses.unknown === 'error'
+            }
+          },
+          notifications: {
+            exitOnHighSeverity: policy.rules.security.maxSeverity !== 'critical',
+            exitOnForbiddenLicense: true
+          }
+        });
+      }
       
       if (!config.output.silent) {
         displayWelcome();
@@ -685,6 +788,102 @@ function filterDependencies(dependencies, ignorePatterns) {
   );
 }
 
+program
+  .command('policy')
+  .description('Manage dependency policies')
+  .option('-l, --list', 'List all available policies')
+  .option('-v, --validate <policy>', 'Validate a policy file')
+  .option('-d, --doc <policy>', 'Generate documentation for a policy')
+  .option('-c, --create <name>', 'Create a new policy')
+  .option('-i, --inherit <parent>', 'Parent policy to inherit from when creating')
+  .action(async (options) => {
+    try {
+      const policyFiles = glob.sync('policies/**/*.{json,yaml,yml}');
+      const policies = await loadPolicies(policyFiles);
+      
+      if (options.list) {
+        console.log(chalk.bold('\nAvailable Policies:'));
+        for (const [name, policy] of policies.entries()) {
+          console.log(`\n${chalk.cyan(name)} (${policy.version})`);
+          console.log(chalk.dim(policy.description || 'No description'));
+          if (policy.extends?.length) {
+            console.log(chalk.dim(`Extends: ${policy.extends.join(', ')}`));
+          }
+        }
+        return;
+      }
+      
+      if (options.validate) {
+        const policy = policies.get(options.validate);
+        if (!policy) {
+          console.error(chalk.red(`Policy "${options.validate}" not found`));
+          process.exit(1);
+        }
+        
+        const { errors, warnings } = validatePolicy(policy);
+        
+        if (errors.length > 0) {
+          console.log(chalk.red('\nValidation Errors:'));
+          errors.forEach(error => console.log(chalk.red(`❌ ${error}`)));
+        }
+        
+        if (warnings.length > 0) {
+          console.log(chalk.yellow('\nValidation Warnings:'));
+          warnings.forEach(warning => console.log(chalk.yellow(`⚠️  ${warning}`)));
+        }
+        
+        if (errors.length === 0 && warnings.length === 0) {
+          console.log(chalk.green('\n✅ Policy is valid'));
+        }
+        
+        return;
+      }
+      
+      if (options.doc) {
+        const policy = policies.get(options.doc);
+        if (!policy) {
+          console.error(chalk.red(`Policy "${options.doc}" not found`));
+          process.exit(1);
+        }
+        
+        const documentation = await generatePolicyDocumentation(policy);
+        const outputPath = `policies/docs/${policy.name}.md`;
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, documentation);
+        
+        console.log(chalk.green(`Documentation generated: ${outputPath}`));
+        return;
+      }
+      
+      if (options.create) {
+        const template = options.inherit
+          ? await deepMerge(defaultPolicy, policies.get(options.inherit))
+          : defaultPolicy;
+          
+        const newPolicy = {
+          ...template,
+          name: options.create,
+          version: '1.0.0',
+          extends: options.inherit ? [options.inherit] : []
+        };
+        
+        const outputPath = `policies/${options.create}.policy.json`;
+        await fs.writeFile(
+          outputPath,
+          JSON.stringify(newPolicy, null, 2)
+        );
+        
+        console.log(chalk.green(`Policy created: ${outputPath}`));
+        return;
+      }
+      
+      program.help();
+    } catch (error) {
+      console.error(chalk.red(`\nError: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
 program.on('command:*', function () {
   console.error(chalk.red('Invalid command: %s\nSee --help for a list of available commands.'), program.args.join(' '));
   process.exit(1);
@@ -695,4 +894,137 @@ program.parse(process.argv);
 if (!process.argv.slice(2).length) {
   displayWelcome();
   program.help();
+}
+
+async function loadPolicies(policyPaths) {
+  const policies = new Map();
+  
+  for (const policyPath of policyPaths) {
+    const content = await fs.readFile(policyPath, 'utf8');
+    const policy = policyPath.endsWith('.yaml') || policyPath.endsWith('.yml')
+      ? yaml.load(content)
+      : JSON.parse(content);
+      
+    policies.set(policy.name, {
+      ...policy,
+      source: policyPath
+    });
+  }
+  
+  return policies;
+}
+
+async function resolvePolicyInheritance(policies) {
+  const resolved = new Map();
+  
+  function mergePolicies(policy, visited = new Set()) {
+    if (visited.has(policy.name)) {
+      throw new Error(`Circular policy inheritance detected: ${Array.from(visited).join(' -> ')} -> ${policy.name}`);
+    }
+    
+    if (resolved.has(policy.name)) {
+      return resolved.get(policy.name);
+    }
+    
+    visited.add(policy.name);
+    
+    const parentPolicies = (policy.extends || [])
+      .map(parentName => {
+        const parent = policies.get(parentName);
+        if (!parent) {
+          throw new Error(`Parent policy "${parentName}" not found for "${policy.name}"`);
+        }
+        return mergePolicies(parent, visited);
+      });
+    
+    const mergedPolicy = parentPolicies.reduce((acc, parent) => deepMerge(acc, parent), {});
+    const finalPolicy = deepMerge(mergedPolicy, policy);
+    
+    resolved.set(policy.name, finalPolicy);
+    return finalPolicy;
+  }
+  
+  for (const [name, policy] of policies.entries()) {
+    if (!resolved.has(name)) {
+      mergePolicies(policy);
+    }
+  }
+  
+  return resolved;
+}
+
+function validatePolicy(policy) {
+  const errors = [];
+  const warnings = [];
+  
+  // Validate required fields
+  if (!policy.name) errors.push('Policy must have a name');
+  if (!policy.version) errors.push('Policy must have a version');
+  if (!policy.rules) errors.push('Policy must have rules defined');
+  
+  // Validate rules
+  if (policy.rules) {
+    if (policy.rules.licenses) {
+      if (!Array.isArray(policy.rules.licenses.allowed)) {
+        errors.push('License allowlist must be an array');
+      }
+      if (!Array.isArray(policy.rules.licenses.forbidden)) {
+        errors.push('License blocklist must be an array');
+      }
+    }
+    
+    if (policy.rules.security) {
+      const validSeverities = ['low', 'moderate', 'high', 'critical'];
+      if (!validSeverities.includes(policy.rules.security.maxSeverity)) {
+        errors.push('Invalid security severity level');
+      }
+    }
+  }
+  
+  return { errors, warnings };
+}
+
+async function generatePolicyDocumentation(policy, template = 'default') {
+  const templates = {
+    default: `# ${policy.name} (v${policy.version})
+
+## Description
+${policy.description || 'No description provided.'}
+
+## License Rules
+- Allowed: ${policy.rules.licenses.allowed.join(', ')}
+- Forbidden: ${policy.rules.licenses.forbidden.join(', ')}
+- Unknown License Handling: ${policy.rules.licenses.unknown}
+
+## Security Rules
+- Maximum Severity: ${policy.rules.security.maxSeverity}
+- Auto-fix Enabled: ${policy.rules.security.autofix}
+${policy.rules.security.exceptions.length ? '\nExceptions:\n' + policy.rules.security.exceptions.map(e => `- ${e}`).join('\n') : ''}
+
+## Versioning Rules
+- Maximum Package Age: ${policy.rules.versioning.maxAge}
+- Major Updates: ${policy.rules.versioning.allowMajorUpdates ? 'Allowed' : 'Forbidden'}
+- Auto-merge Settings:
+  - Patch: ${policy.rules.versioning.autoMerge.patch}
+  - Minor: ${policy.rules.versioning.autoMerge.minor}
+  - Major: ${policy.rules.versioning.autoMerge.major}
+
+## Dependency Rules
+- Maximum Direct Dependencies: ${policy.rules.dependencies.maxDirect}
+- Maximum Dependency Depth: ${policy.rules.dependencies.maxDepth}
+- Duplicates Allowed: ${policy.rules.dependencies.duplicatesAllowed}
+${policy.rules.dependencies.bannedPackages.length ? '\nBanned Packages:\n' + policy.rules.dependencies.bannedPackages.map(p => `- ${p}`).join('\n') : ''}
+${policy.rules.dependencies.requiredPackages.length ? '\nRequired Packages:\n' + policy.rules.dependencies.requiredPackages.map(p => `- ${p}`).join('\n') : ''}
+
+## Notifications
+- Slack: ${policy.notifications.slack}
+- Email: ${policy.notifications.email}
+- GitHub Issues: ${policy.notifications.githubIssues}
+
+---
+Generated on: ${new Date().toISOString()}
+`
+  };
+  
+  return templates[template] || templates.default;
 }

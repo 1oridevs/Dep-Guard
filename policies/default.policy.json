@@ -1,0 +1,43 @@
+{
+  "name": "Default Organization Policy",
+  "version": "1.0.0",
+  "description": "Default dependency management policy",
+  "extends": [],
+  "rules": {
+    "licenses": {
+      "allowed": ["MIT", "ISC", "Apache-2.0", "BSD-3-Clause"],
+      "forbidden": ["GPL", "AGPL"],
+      "unknown": "warn"
+    },
+    "security": {
+      "maxSeverity": "moderate",
+      "autofix": false,
+      "exceptions": []
+    },
+    "versioning": {
+      "maxAge": "6 months",
+      "allowMajorUpdates": false,
+      "autoMerge": {
+        "patch": true,
+        "minor": false,
+        "major": false
+      }
+    },
+    "dependencies": {
+      "maxDirect": 150,
+      "maxDepth": 10,
+      "bannedPackages": [],
+      "requiredPackages": [],
+      "duplicatesAllowed": false
+    }
+  },
+  "notifications": {
+    "slack": false,
+    "email": false,
+    "githubIssues": true
+  },
+  "documentation": {
+    "required": true,
+    "template": "default"
+  }
+} 
