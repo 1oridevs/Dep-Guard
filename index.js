@@ -10,6 +10,7 @@ const util = require('util');
 const semver = require('semver');
 const execPromise = util.promisify(exec);
 const program = new Command();
+const { cosmiconfig } = require('cosmiconfig');
 
 program
   .name('dependency-guardian')
@@ -111,7 +112,7 @@ function checkLicenseCompliance(license, allowedLicenses) {
   return allowedLicenses.includes(license) ? 'COMPLIANT' : 'NON-COMPLIANT';
 }
 
-async function scanDependencies(dependencies, type = 'dependencies', allowedLicenses, vulnerabilities) {
+async function scanDependencies(dependencies, type = 'dependencies', allowedLicenses, vulnerabilities, rules) {
   const results = [];
   
   for (const [name, version] of Object.entries(dependencies)) {
@@ -377,43 +378,98 @@ function generateSummary(results) {
   });
 }
 
+const defaultConfig = {
+  allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
+  ignorePatterns: ['**/node_modules/**', '**/dist/**'],
+  rules: {
+    dependencies: {
+      maxAge: '6 months',
+      forbiddenLicenses: ['GPL'],
+      requireLicense: true
+    },
+    devDependencies: {
+      maxAge: '1 year',
+      forbiddenLicenses: [],
+      requireLicense: false
+    }
+  },
+  output: {
+    defaultFormat: 'console',
+    reportsDir: './reports',
+    silent: false,
+    debug: false
+  },
+  notifications: {
+    exitOnHighSeverity: true,
+    exitOnForbiddenLicense: true
+  }
+};
+
+async function loadConfig(configPath) {
+  try {
+    const explorer = cosmiconfig('depguard');
+    const result = configPath 
+      ? await explorer.load(configPath)
+      : await explorer.search();
+    
+    return result ? { ...defaultConfig, ...result.config } : defaultConfig;
+  } catch (error) {
+    console.warn(chalk.yellow(`Warning: Could not load config file. Using defaults. (${error.message})`));
+    return defaultConfig;
+  }
+}
+
 program
   .command('scan')
   .description('Scan project dependencies for issues')
   .option('-p, --path <path>', 'path to project directory', '.')
   .option('-d, --include-dev', 'include devDependencies in scan', false)
-  .option('-l, --licenses <licenses>', 'allowed licenses (comma-separated)', 'MIT,ISC,Apache-2.0,BSD-3-Clause')
-  .option('-f, --format <format>', 'output format (console, json, csv, html)', 'console')
+  .option('-l, --licenses <licenses>', 'allowed licenses (comma-separated)')
+  .option('-f, --format <format>', 'output format (console, json, csv, html)')
   .option('-o, --output <file>', 'output file path')
+  .option('-c, --config <path>', 'path to config file')
   .action(async (options) => {
     try {
-      displayWelcome();
-      console.log(chalk.yellow('Scanning dependencies...'));
-      console.log(chalk.dim(`Project path: ${options.path}`));
+      const config = await loadConfig(options.config);
       
-      const allowedLicenses = options.licenses.split(',').map(l => l.trim());
-      console.log(chalk.dim(`Allowed licenses: ${allowedLicenses.join(', ')}`));
+      if (!config.output.silent) {
+        displayWelcome();
+        console.log(chalk.yellow('Scanning dependencies...'));
+        console.log(chalk.dim(`Project path: ${options.path}`));
+      }
+
+      const allowedLicenses = options.licenses
+        ? options.licenses.split(',').map(l => l.trim())
+        : config.allowedLicenses;
+
+      if (config.output.debug) {
+        console.log(chalk.dim('Config:', JSON.stringify(config, null, 2)));
+      }
       
       const packageJson = await readPackageJson(options.path);
       const vulnerabilities = await getVulnerabilities(options.path);
       let results = [];
 
       if (Object.keys(packageJson.dependencies || {}).length > 0) {
+        const filteredDeps = filterDependencies(packageJson.dependencies, config.ignorePatterns);
         const dependencyResults = await scanDependencies(
-          packageJson.dependencies || {}, 
-          'dependencies', 
+          filteredDeps,
+          'dependencies',
           allowedLicenses,
-          vulnerabilities
+          vulnerabilities,
+          config.rules.dependencies
         );
         results = results.concat(dependencyResults);
       }
 
       if (options.includeDev && Object.keys(packageJson.devDependencies || {}).length > 0) {
+        const filteredDevDeps = filterDependencies(packageJson.devDependencies, config.ignorePatterns);
         const devDependencyResults = await scanDependencies(
-          packageJson.devDependencies || {}, 
-          'devDependencies', 
+          filteredDevDeps,
+          'devDependencies',
           allowedLicenses,
-          vulnerabilities
+          vulnerabilities,
+          config.rules.devDependencies
         );
         results = results.concat(devDependencyResults);
       }
@@ -423,25 +479,62 @@ program
         return;
       }
 
-      if (options.format === 'console') {
+      const format = options.format || config.output.defaultFormat;
+      const outputPath = options.output || 
+        (format !== 'console' ? path.join(config.output.reportsDir, `report.${format}`) : null);
+
+      if (outputPath) {
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      }
+
+      if (format === 'console' && !config.output.silent) {
         displayResults(results);
-      } else if (formatters[options.format]) {
-        const output = await formatters[options.format](results, options.output);
-        if (options.output) {
+      } else if (formatters[format]) {
+        const output = await formatters[format](results, outputPath);
+        if (outputPath) {
           console.log(chalk.green(output));
         } else {
           console.log(output);
         }
       } else {
-        console.error(chalk.red(`Unsupported format: ${options.format}`));
+        console.error(chalk.red(`Unsupported format: ${format}`));
+        process.exit(1);
+      }
+
+      // Handle exit conditions
+      const hasHighSeverity = results.some(r => ['HIGH', 'CRITICAL'].includes(r.vulnLevel));
+      const hasForbiddenLicense = results.some(r => r.licenseStatus === 'NON-COMPLIANT');
+
+      if (config.notifications.exitOnHighSeverity && hasHighSeverity) {
+        console.error(chalk.red('\nHigh severity vulnerabilities found!'));
+        process.exit(1);
+      }
+
+      if (config.notifications.exitOnForbiddenLicense && hasForbiddenLicense) {
+        console.error(chalk.red('\nForbidden licenses found!'));
         process.exit(1);
       }
       
     } catch (error) {
       console.error(chalk.red(`\nError: ${error.message}`));
+      if (config?.output?.debug) {
+        console.error(error.stack);
+      }
       process.exit(1);
     }
   });
+
+function filterDependencies(dependencies, ignorePatterns) {
+  if (!ignorePatterns || ignorePatterns.length === 0) return dependencies;
+  
+  return Object.fromEntries(
+    Object.entries(dependencies).filter(([name]) => 
+      !ignorePatterns.some(pattern => 
+        new RegExp(pattern.replace(/\*/g, '.*')).test(name)
+      )
+    )
+  );
+}
 
 program.on('command:*', function () {
   console.error(chalk.red('Invalid command: %s\nSee --help for a list of available commands.'), program.args.join(' '));
