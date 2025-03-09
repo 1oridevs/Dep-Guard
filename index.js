@@ -1140,7 +1140,8 @@ async function performFullScan(config) {
       packageJson.dependencies,
       'dependencies',
       config.allowedLicenses,
-      vulnerabilities
+      vulnerabilities,
+      config.rules.dependencies
     );
     results = results.concat(dependencyResults);
   }
@@ -1150,7 +1151,8 @@ async function performFullScan(config) {
       packageJson.devDependencies,
       'devDependencies',
       config.allowedLicenses,
-      vulnerabilities
+      vulnerabilities,
+      config.rules.devDependencies
     );
     results = results.concat(devDependencyResults);
   }
@@ -1199,12 +1201,16 @@ async function runCICheck() {
   const defaultConfig = {
     path: '.',
     includeDev: true,
-    allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause']
+    allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
+    output: {
+      debug: false
+    }
   };
   
   let config;
   try {
-    config = await loadConfig();
+    const loadedConfig = await loadConfig();
+    config = { ...defaultConfig, ...loadedConfig };
   } catch (error) {
     console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
     config = defaultConfig;
@@ -1223,14 +1229,16 @@ async function runCICheck() {
     
     return {
       hasIssues: hasHighSeverity || hasForbiddenLicense,
-      results
+      results,
+      config
     };
   } catch (error) {
     console.error(chalk.red('Error during CI check:', error.message));
     return {
       hasIssues: true,
       results: [],
-      error: error.message
+      error: error.message,
+      config
     };
   }
 }

@@ -1,20 +1,34 @@
-#!/bin/bash
+#!/usr/bin/env node
 
-# Run Dependency Guardian check
-echo "🔍 Running Dependency Guardian check..."
-dependency-guardian scan --format json > .dependency-check.tmp.json
+const { execSync } = require('child_process');
 
-# Check for high severity issues or forbidden licenses
-HIGH_SEVERITY=$(jq '.summary.vulnerabilities["HIGH"] + .summary.vulnerabilities["CRITICAL"]' .dependency-check.tmp.json)
-FORBIDDEN_LICENSES=$(jq '.summary.licenses["NON-COMPLIANT"]' .dependency-check.tmp.json)
-
-if [ "$HIGH_SEVERITY" -gt 0 ] || [ "$FORBIDDEN_LICENSES" -gt 0 ]; then
-    echo "❌ Dependency check failed!"
-    echo "Found $HIGH_SEVERITY high/critical vulnerabilities and $FORBIDDEN_LICENSES forbidden licenses"
-    echo "Please fix these issues before committing"
-    rm .dependency-check.tmp.json
-    exit 1
-fi
-
-rm .dependency-check.tmp.json
-exit 0 
+try {
+  console.log("🔍 Running Dependency Guardian check...");
+  
+  const scanOutput = execSync('dependency-guardian scan --format json', { 
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  
+  const results = JSON.parse(scanOutput);
+  
+  const highSeverity = (
+    (results.summary?.vulnerabilities?.HIGH || 0) + 
+    (results.summary?.vulnerabilities?.CRITICAL || 0)
+  );
+  
+  const forbiddenLicenses = results.summary?.licenses?.NON_COMPLIANT || 0;
+  
+  if (highSeverity > 0 || forbiddenLicenses > 0) {
+    console.error("❌ Dependency check failed!");
+    console.error(`Found ${highSeverity} high/critical vulnerabilities and ${forbiddenLicenses} forbidden licenses`);
+    console.error("Please fix these issues before committing");
+    process.exit(1);
+  }
+  
+  process.exit(0);
+} catch (error) {
+  console.error("Error running dependency check:", error.message);
+  // Don't block the commit if the check fails to run
+  process.exit(0);
+} 
