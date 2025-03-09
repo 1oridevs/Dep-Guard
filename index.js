@@ -7,6 +7,7 @@ const fs = require('fs').promises;
 const axios = require('axios');
 const { exec } = require('child_process');
 const util = require('util');
+const semver = require('semver');
 const execPromise = util.promisify(exec);
 const program = new Command();
 
@@ -30,9 +31,18 @@ async function getPackageInfo(packageName) {
     const response = await axios.get(`https://registry.npmjs.org/${packageName}`);
     const latestVersion = response.data['dist-tags'].latest;
     const license = response.data.versions[latestVersion].license || 'Unknown';
-    return { latestVersion, license };
+    const versions = Object.keys(response.data.versions);
+    return { 
+      latestVersion, 
+      license,
+      versions: versions.filter(v => semver.valid(v)).sort(semver.rcompare)
+    };
   } catch (error) {
-    return { latestVersion: null, license: 'Unknown' };
+    return { 
+      latestVersion: null, 
+      license: 'Unknown',
+      versions: []
+    };
   }
 }
 
@@ -65,12 +75,35 @@ function getSeverityLevel(vulnerabilities) {
   return { level: 'NONE', count: 0 };
 }
 
-function compareVersions(current, latest) {
-  if (!latest) return 'ERROR';
-  if (current.startsWith('^') || current.startsWith('~')) {
-    current = current.substring(1);
+function analyzeVersionChange(current, latest, allVersions) {
+  if (!latest || !current) return { type: 'ERROR', suggestedUpdate: null };
+  
+  const cleanCurrent = current.replace(/[\^~]/, '');
+  if (!semver.valid(cleanCurrent) || !semver.valid(latest)) {
+    return { type: 'ERROR', suggestedUpdate: null };
   }
-  return current === latest ? 'UP-TO-DATE' : 'UPDATE AVAILABLE';
+
+  if (semver.eq(cleanCurrent, latest)) {
+    return { type: 'UP-TO-DATE', suggestedUpdate: null };
+  }
+
+  const diff = semver.diff(cleanCurrent, latest);
+  const safeUpdate = allVersions.find(v => 
+    semver.gt(v, cleanCurrent) && 
+    semver.patch(v) > semver.patch(cleanCurrent) &&
+    semver.major(v) === semver.major(cleanCurrent) &&
+    semver.minor(v) === semver.minor(cleanCurrent)
+  );
+
+  const minorUpdate = allVersions.find(v =>
+    semver.gt(v, cleanCurrent) &&
+    semver.major(v) === semver.major(cleanCurrent)
+  );
+
+  return {
+    type: diff,
+    suggestedUpdate: safeUpdate || minorUpdate || latest
+  };
 }
 
 function checkLicenseCompliance(license, allowedLicenses) {
@@ -82,8 +115,8 @@ async function scanDependencies(dependencies, type = 'dependencies', allowedLice
   const results = [];
   
   for (const [name, version] of Object.entries(dependencies)) {
-    const { latestVersion, license } = await getPackageInfo(name);
-    const versionStatus = compareVersions(version, latestVersion);
+    const { latestVersion, license, versions } = await getPackageInfo(name);
+    const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(version, latestVersion, versions);
     const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
     const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
     
@@ -92,6 +125,7 @@ async function scanDependencies(dependencies, type = 'dependencies', allowedLice
       type,
       currentVersion: version,
       latestVersion: latestVersion || 'Unknown',
+      suggestedUpdate,
       license,
       versionStatus,
       licenseStatus,
@@ -114,12 +148,18 @@ function displayResults(results) {
 
   Object.entries(grouped).forEach(([type, deps]) => {
     console.log(chalk.cyan.bold(`\n${type}:`));
-    deps.forEach(({ name, currentVersion, latestVersion, license, versionStatus, licenseStatus, vulnLevel, vulnCount }) => {
+    deps.forEach(({ name, currentVersion, latestVersion, suggestedUpdate, license, versionStatus, licenseStatus, vulnLevel, vulnCount }) => {
       const versionStatusColor = {
         'UP-TO-DATE': 'green',
-        'UPDATE AVAILABLE': 'yellow',
+        'major': 'red',
+        'minor': 'yellow',
+        'patch': 'blue',
         'ERROR': 'red'
       }[versionStatus];
+
+      const versionText = suggestedUpdate ? 
+        `${versionStatus.toUpperCase()} update available (${suggestedUpdate})` :
+        versionStatus;
 
       const licenseStatusColor = {
         'COMPLIANT': 'green',
@@ -143,8 +183,8 @@ function displayResults(results) {
         `${chalk.bold(name)} - ` +
         `Current: ${chalk.blue(currentVersion)} | ` +
         `Latest: ${chalk.blue(latestVersion)} | ` +
+        `Update: ${chalk[versionStatusColor](versionText)} | ` +
         `License: ${chalk[licenseStatusColor](license)} | ` +
-        `Version: ${chalk[versionStatusColor](versionStatus)} | ` +
         `Security: ${chalk[vulnColor](vulnText)}`
       );
     });
@@ -155,7 +195,11 @@ function displayResults(results) {
 
 function displaySummary(results) {
   const summary = results.reduce((acc, { versionStatus, licenseStatus, vulnLevel }) => {
-    acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
+    if (['major', 'minor', 'patch'].includes(versionStatus)) {
+      acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
+    } else {
+      acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
+    }
     acc.licenses[licenseStatus] = (acc.licenses[licenseStatus] || 0) + 1;
     acc.vulnerabilities[vulnLevel] = (acc.vulnerabilities[vulnLevel] || 0) + 1;
     return acc;
@@ -166,7 +210,9 @@ function displaySummary(results) {
   
   console.log(chalk.bold('\nVersion Status:'));
   console.log(`✅ Up-to-date: ${chalk.green(summary.versions['UP-TO-DATE'] || 0)}`);
-  console.log(`⚠️  Updates available: ${chalk.yellow(summary.versions['UPDATE AVAILABLE'] || 0)}`);
+  console.log(`🔴 Major updates: ${chalk.red(summary.versions['major'] || 0)}`);
+  console.log(`🟡 Minor updates: ${chalk.yellow(summary.versions['minor'] || 0)}`);
+  console.log(`🔵 Patch updates: ${chalk.blue(summary.versions['patch'] || 0)}`);
   console.log(`❌ Errors: ${chalk.red(summary.versions['ERROR'] || 0)}`);
   
   console.log(chalk.bold('\nLicense Status:'));
