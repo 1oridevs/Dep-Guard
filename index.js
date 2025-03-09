@@ -22,12 +22,14 @@ async function readPackageJson(projectPath) {
   return JSON.parse(data);
 }
 
-async function getLatestVersion(packageName) {
+async function getPackageInfo(packageName) {
   try {
     const response = await axios.get(`https://registry.npmjs.org/${packageName}`);
-    return response.data['dist-tags'].latest;
+    const latestVersion = response.data['dist-tags'].latest;
+    const license = response.data.versions[latestVersion].license || 'Unknown';
+    return { latestVersion, license };
   } catch (error) {
-    return null;
+    return { latestVersion: null, license: 'Unknown' };
   }
 }
 
@@ -39,19 +41,27 @@ function compareVersions(current, latest) {
   return current === latest ? 'UP-TO-DATE' : 'UPDATE AVAILABLE';
 }
 
-async function scanDependencies(dependencies, type = 'dependencies') {
+function checkLicenseCompliance(license, allowedLicenses) {
+  if (!license || license === 'Unknown') return 'UNKNOWN';
+  return allowedLicenses.includes(license) ? 'COMPLIANT' : 'NON-COMPLIANT';
+}
+
+async function scanDependencies(dependencies, type = 'dependencies', allowedLicenses) {
   const results = [];
   
   for (const [name, version] of Object.entries(dependencies)) {
-    const latestVersion = await getLatestVersion(name);
-    const status = compareVersions(version, latestVersion);
+    const { latestVersion, license } = await getPackageInfo(name);
+    const versionStatus = compareVersions(version, latestVersion);
+    const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
     
     results.push({
       name,
       type,
       currentVersion: version,
       latestVersion: latestVersion || 'Unknown',
-      status
+      license,
+      versionStatus,
+      licenseStatus
     });
   }
   
@@ -69,18 +79,25 @@ function displayResults(results) {
 
   Object.entries(grouped).forEach(([type, deps]) => {
     console.log(chalk.cyan.bold(`\n${type}:`));
-    deps.forEach(({ name, currentVersion, latestVersion, status }) => {
-      const statusColor = {
+    deps.forEach(({ name, currentVersion, latestVersion, license, versionStatus, licenseStatus }) => {
+      const versionStatusColor = {
         'UP-TO-DATE': 'green',
         'UPDATE AVAILABLE': 'yellow',
         'ERROR': 'red'
-      }[status];
+      }[versionStatus];
+
+      const licenseStatusColor = {
+        'COMPLIANT': 'green',
+        'NON-COMPLIANT': 'red',
+        'UNKNOWN': 'yellow'
+      }[licenseStatus];
       
       console.log(
         `${chalk.bold(name)} - ` +
         `Current: ${chalk.blue(currentVersion)} | ` +
         `Latest: ${chalk.blue(latestVersion)} | ` +
-        `Status: ${chalk[statusColor](status)}`
+        `License: ${chalk[licenseStatusColor](license)} | ` +
+        `Version: ${chalk[versionStatusColor](versionStatus)}`
       );
     });
   });
@@ -89,17 +106,25 @@ function displayResults(results) {
 }
 
 function displaySummary(results) {
-  const summary = results.reduce((acc, { status }) => {
-    acc[status] = (acc[status] || 0) + 1;
+  const summary = results.reduce((acc, { versionStatus, licenseStatus }) => {
+    acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
+    acc.licenses[licenseStatus] = (acc.licenses[licenseStatus] || 0) + 1;
     return acc;
-  }, {});
+  }, { versions: {}, licenses: {} });
 
   console.log(chalk.bold('\nSummary:'));
   console.log('----------------------------------------');
-  console.log(`✅ Up-to-date: ${chalk.green(summary['UP-TO-DATE'] || 0)}`);
-  console.log(`⚠️  Updates available: ${chalk.yellow(summary['UPDATE AVAILABLE'] || 0)}`);
-  console.log(`❌ Errors: ${chalk.red(summary['ERROR'] || 0)}`);
-  console.log(`📦 Total packages scanned: ${chalk.blue(results.length)}`);
+  console.log(chalk.bold('\nVersion Status:'));
+  console.log(`✅ Up-to-date: ${chalk.green(summary.versions['UP-TO-DATE'] || 0)}`);
+  console.log(`⚠️  Updates available: ${chalk.yellow(summary.versions['UPDATE AVAILABLE'] || 0)}`);
+  console.log(`❌ Errors: ${chalk.red(summary.versions['ERROR'] || 0)}`);
+  
+  console.log(chalk.bold('\nLicense Status:'));
+  console.log(`✅ Compliant: ${chalk.green(summary.licenses['COMPLIANT'] || 0)}`);
+  console.log(`❌ Non-compliant: ${chalk.red(summary.licenses['NON-COMPLIANT'] || 0)}`);
+  console.log(`⚠️  Unknown: ${chalk.yellow(summary.licenses['UNKNOWN'] || 0)}`);
+  
+  console.log(`\n📦 Total packages scanned: ${chalk.blue(results.length)}`);
   console.log('----------------------------------------\n');
 }
 
@@ -108,22 +133,26 @@ program
   .description('Scan project dependencies for issues')
   .option('-p, --path <path>', 'path to project directory', '.')
   .option('-d, --include-dev', 'include devDependencies in scan', false)
+  .option('-l, --licenses <licenses>', 'allowed licenses (comma-separated)', 'MIT,ISC,Apache-2.0,BSD-3-Clause')
   .action(async (options) => {
     try {
       displayWelcome();
       console.log(chalk.yellow('Scanning dependencies...'));
       console.log(chalk.dim(`Project path: ${options.path}`));
       
+      const allowedLicenses = options.licenses.split(',').map(l => l.trim());
+      console.log(chalk.dim(`Allowed licenses: ${allowedLicenses.join(', ')}`));
+      
       const packageJson = await readPackageJson(options.path);
       let results = [];
 
       if (Object.keys(packageJson.dependencies || {}).length > 0) {
-        const dependencyResults = await scanDependencies(packageJson.dependencies || {}, 'dependencies');
+        const dependencyResults = await scanDependencies(packageJson.dependencies || {}, 'dependencies', allowedLicenses);
         results = results.concat(dependencyResults);
       }
 
       if (options.includeDev && Object.keys(packageJson.devDependencies || {}).length > 0) {
-        const devDependencyResults = await scanDependencies(packageJson.devDependencies || {}, 'devDependencies');
+        const devDependencyResults = await scanDependencies(packageJson.devDependencies || {}, 'devDependencies', allowedLicenses);
         results = results.concat(devDependencyResults);
       }
 
