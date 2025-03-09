@@ -20,6 +20,7 @@ const ora = require('ora');
 const cliProgress = require('cli-progress');
 const pLimit = require('p-limit');
 const NodeCache = require('node-cache');
+const inquirer = require('inquirer');
 
 const registryCache = new NodeCache({ 
   stdTTL: 3600,
@@ -892,7 +893,7 @@ function filterDependencies(dependencies, ignorePatterns) {
         new RegExp(pattern.replace(/\*/g, '.*')).test(name)
       )
     )
-  )
+  );
 }
 
 program
@@ -1048,6 +1049,42 @@ program
     }
     
     program.help();
+  });
+
+program
+  .command('interactive')
+  .alias('i')
+  .description('Run in interactive mode')
+  .option('-p, --path <path>', 'project path')
+  .action(async (options) => {
+    try {
+      displayWelcome();
+      const results = await performFullScan({
+        path: options.path || '.',
+        includeDev: true
+      });
+
+      const choices = results.map(dep => ({
+        name: `${dep.name} (${dep.currentVersion} → ${dep.latestVersion})`,
+        value: dep,
+        short: dep.name
+      }));
+
+      const { selectedDep } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'selectedDep',
+          message: 'Select a package to view/update:',
+          choices,
+          pageSize: 15
+        }
+      ]);
+
+      await showPackageDetails(selectedDep);
+    } catch (error) {
+      console.error(chalk.red(`\nError: ${error.message}`));
+      process.exit(1);
+    }
   });
 
 program.on('command:*', function () {
@@ -1359,4 +1396,174 @@ function filterDependencies(results, filters) {
     
     return true;
   });
+}
+
+async function showPackageDetails(dep) {
+  console.clear();
+  console.log(chalk.bold(`\nPackage Details: ${dep.name}\n`));
+  
+  // Display basic info
+  console.log(chalk.dim('Version Info:'));
+  console.log(`Current: ${chalk.blue(dep.currentVersion)}`);
+  console.log(`Latest:  ${chalk.blue(dep.latestVersion)}`);
+  console.log(`Status:  ${getStatusColor(dep.versionStatus)(dep.versionStatus)}`);
+  if (dep.suggestedUpdate) {
+    console.log(`Suggested Update: ${chalk.green(dep.suggestedUpdate)}`);
+  }
+
+  console.log(chalk.dim('\nLicense Info:'));
+  console.log(`License: ${getLicenseColor(dep.licenseStatus)(dep.license)}`);
+  console.log(`Status:  ${getLicenseColor(dep.licenseStatus)(dep.licenseStatus)}`);
+
+  if (dep.vulnLevel !== 'NONE') {
+    console.log(chalk.dim('\nVulnerabilities:'));
+    console.log(`Level: ${chalk.red(dep.vulnLevel)}`);
+    console.log(`Count: ${chalk.red(dep.vulnCount)}`);
+  }
+
+  // Show package details from npm
+  const details = await getDetailedPackageInfo(dep.name);
+  
+  console.log(chalk.dim('\nPackage Info:'));
+  console.log(`Description: ${details.description || 'No description'}`);
+  console.log(`Homepage:    ${details.homepage || 'N/A'}`);
+  console.log(`Repository:  ${details.repository || 'N/A'}`);
+  console.log(`Downloads:   ${details.downloads}/month`);
+  console.log(`Last Update: ${details.lastUpdate}`);
+
+  // Show available actions
+  const { action } = await inquirer.prompt([
+    {
+      type: 'list',
+      name: 'action',
+      message: 'What would you like to do?',
+      choices: [
+        { name: 'Update to Latest', value: 'update-latest' },
+        { name: 'Update to Suggested Version', value: 'update-suggested' },
+        { name: 'View Changelog', value: 'changelog' },
+        { name: 'View Dependencies', value: 'dependencies' },
+        { name: 'Back to List', value: 'back' },
+        { name: 'Exit', value: 'exit' }
+      ]
+    }
+  ]);
+
+  switch (action) {
+    case 'update-latest':
+    case 'update-suggested':
+      await updatePackage(dep, action === 'update-latest' ? dep.latestVersion : dep.suggestedUpdate);
+      break;
+    case 'changelog':
+      await viewChangelog(dep);
+      break;
+    case 'dependencies':
+      await viewDependencies(dep);
+      break;
+    case 'exit':
+      process.exit(0);
+  }
+}
+
+function getStatusColor(status) {
+  const colors = {
+    'UP-TO-DATE': 'green',
+    'patch': 'yellow',
+    'minor': 'yellow',
+    'major': 'red',
+    'ERROR': 'red'
+  };
+  return chalk[colors[status] || 'white'];
+}
+
+function getLicenseColor(status) {
+  const colors = {
+    'COMPLIANT': 'green',
+    'NON-COMPLIANT': 'red',
+    'UNKNOWN': 'yellow'
+  };
+  return chalk[colors[status] || 'white'];
+}
+
+async function getDetailedPackageInfo(packageName) {
+  try {
+    const response = await axios.get(`https://registry.npmjs.org/${packageName}`);
+    const latest = response.data.versions[response.data['dist-tags'].latest];
+    return {
+      description: latest.description || response.data.description,
+      homepage: latest.homepage || response.data.homepage,
+      repository: latest.repository?.url || response.data.repository?.url || 'N/A',
+      downloads: '(downloads data not available)', // Would need separate NPM API call
+      lastUpdate: new Date(response.data.time.modified).toLocaleDateString()
+    };
+  } catch (error) {
+    return {
+      description: 'No description available',
+      homepage: 'N/A',
+      repository: 'N/A',
+      downloads: 'N/A',
+      lastUpdate: 'Unknown'
+    };
+  }
+}
+
+async function updatePackage(dep, version) {
+  try {
+    console.log(chalk.yellow(`\nUpdating ${dep.name} to version ${version}...`));
+    await execPromise(`npm install ${dep.name}@${version}`);
+    console.log(chalk.green('✅ Package updated successfully!'));
+  } catch (error) {
+    console.error(chalk.red('Error updating package:', error.message));
+  }
+  await new Promise(resolve => setTimeout(resolve, 2000));
+}
+
+async function viewChangelog(dep) {
+  console.clear();
+  console.log(chalk.bold(`\nChangelog for ${dep.name}\n`));
+  
+  try {
+    const response = await axios.get(`https://registry.npmjs.org/${dep.name}`);
+    const versions = Object.keys(response.data.time)
+      .filter(v => semver.valid(v))
+      .sort(semver.rcompare);
+
+    versions.forEach(version => {
+      const date = new Date(response.data.time[version]).toLocaleDateString();
+      console.log(chalk.blue(`\n${version}`) + chalk.dim(` (${date})`));
+    });
+  } catch (error) {
+    console.error(chalk.red('Error fetching changelog:', error.message));
+  }
+  
+  await new Promise(resolve => setTimeout(resolve, 5000));
+}
+
+async function viewDependencies(dep) {
+  console.clear();
+  console.log(chalk.bold(`\nDependencies for ${dep.name}\n`));
+  
+  try {
+    const response = await axios.get(`https://registry.npmjs.org/${dep.name}`);
+    const latest = response.data.versions[response.data['dist-tags'].latest];
+    
+    if (latest.dependencies && Object.keys(latest.dependencies).length > 0) {
+      console.log(chalk.dim('Dependencies:'));
+      Object.entries(latest.dependencies).forEach(([name, version]) => {
+        console.log(`${name}: ${chalk.blue(version)}`);
+      });
+    } else {
+      console.log(chalk.dim('No dependencies'));
+    }
+    
+    if (latest.devDependencies && Object.keys(latest.devDependencies).length > 0) {
+      console.log(chalk.dim('\nDev Dependencies:'));
+      Object.entries(latest.devDependencies).forEach(([name, version]) => {
+        console.log(`${name}: ${chalk.blue(version)}`);
+      });
+    }
+  } catch (error) {
+    console.error(chalk.red('Error fetching dependencies:', error.message));
+  }
+  
+  await new Promise(resolve => setTimeout(resolve, 5000));
 }
