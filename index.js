@@ -11,6 +11,8 @@ const semver = require('semver');
 const execPromise = util.promisify(exec);
 const program = new Command();
 const { cosmiconfig } = require('cosmiconfig');
+const dependencyTree = require('dependency-tree');
+const madge = require('madge');
 
 program
   .name('dependency-guardian')
@@ -357,6 +359,27 @@ const formatters = {
       return `HTML report saved to: ${outputPath}`;
     }
     return template;
+  },
+
+  async analysis(results, outputPath) {
+    const analysisResults = {
+      timestamp: new Date().toISOString(),
+      dependencyAnalysis: results.treeAnalysis,
+      packageAnalysis: results.results,
+      summary: {
+        totalPackages: results.results.length,
+        uniqueDependencies: results.treeAnalysis.totalDependencies,
+        maxDepth: results.treeAnalysis.depth,
+        circularDependencies: results.treeAnalysis.circular.length,
+        duplicateDependencies: Array.from(results.treeAnalysis.duplicates.keys()).length
+      }
+    };
+
+    if (outputPath) {
+      await fs.writeFile(outputPath, JSON.stringify(analysisResults, null, 2));
+      return `Analysis report saved to: ${outputPath}`;
+    }
+    return JSON.stringify(analysisResults, null, 2);
   }
 };
 
@@ -419,6 +442,122 @@ async function loadConfig(configPath) {
   }
 }
 
+async function analyzeDependencyTree(projectPath) {
+  try {
+    const tree = dependencyTree({
+      filename: path.join(projectPath, 'package.json'),
+      directory: projectPath,
+      filter: path => path.indexOf('node_modules') === -1
+    });
+    
+    const madgeInstance = await madge(projectPath, {
+      baseDir: projectPath,
+      excludeRegExp: [/node_modules/]
+    });
+
+    const circularDeps = madgeInstance.circular();
+    const duplicates = findDuplicateDependencies(tree);
+    
+    return {
+      tree,
+      circular: circularDeps,
+      duplicates,
+      depth: calculateTreeDepth(tree),
+      totalDependencies: countDependencies(tree)
+    };
+  } catch (error) {
+    console.error(chalk.red('Error analyzing dependency tree:', error.message));
+    return null;
+  }
+}
+
+function findDuplicateDependencies(tree) {
+  const versions = new Map();
+  const duplicates = new Map();
+
+  function traverse(node, path = []) {
+    Object.entries(node).forEach(([name, subTree]) => {
+      const currentPath = [...path, name];
+      if (!versions.has(name)) {
+        versions.set(name, new Set());
+      }
+      versions.get(name).add(currentPath.join(' → '));
+      
+      if (typeof subTree === 'object') {
+        traverse(subTree, currentPath);
+      }
+    });
+  }
+
+  traverse(tree);
+
+  versions.forEach((paths, name) => {
+    if (paths.size > 1) {
+      duplicates.set(name, Array.from(paths));
+    }
+  });
+
+  return duplicates;
+}
+
+function calculateTreeDepth(tree) {
+  function getDepth(node) {
+    if (typeof node !== 'object' || Object.keys(node).length === 0) {
+      return 0;
+    }
+    return 1 + Math.max(...Object.values(node).map(getDepth));
+  }
+  return getDepth(tree);
+}
+
+function countDependencies(tree) {
+  const unique = new Set();
+  
+  function traverse(node) {
+    Object.keys(node).forEach(dep => {
+      unique.add(dep);
+      if (typeof node[dep] === 'object') {
+        traverse(node[dep]);
+      }
+    });
+  }
+  
+  traverse(tree);
+  return unique.size;
+}
+
+function displayAdvancedAnalysis(treeAnalysis) {
+  console.log(chalk.bold('\nAdvanced Dependency Analysis:'));
+  console.log('----------------------------------------');
+  
+  console.log(chalk.bold('\nDependency Tree Statistics:'));
+  console.log(`📦 Total Unique Dependencies: ${chalk.blue(treeAnalysis.totalDependencies)}`);
+  console.log(`📏 Maximum Tree Depth: ${chalk.blue(treeAnalysis.depth)}`);
+  
+  if (treeAnalysis.circular.length > 0) {
+    console.log(chalk.bold('\n⚠️  Circular Dependencies Detected:'));
+    treeAnalysis.circular.forEach((circle, index) => {
+      console.log(chalk.yellow(`${index + 1}. ${circle.join(' → ')}`));
+    });
+  } else {
+    console.log(chalk.green('\n✅ No circular dependencies detected'));
+  }
+
+  if (treeAnalysis.duplicates.size > 0) {
+    console.log(chalk.bold('\n⚠️  Duplicate Dependencies Detected:'));
+    treeAnalysis.duplicates.forEach((paths, name) => {
+      console.log(chalk.yellow(`\n${name} appears in multiple paths:`));
+      paths.forEach((path, index) => {
+        console.log(chalk.dim(`  ${index + 1}. ${path}`));
+      });
+    });
+  } else {
+    console.log(chalk.green('\n✅ No duplicate dependencies detected'));
+  }
+  
+  console.log('\n----------------------------------------');
+}
+
 program
   .command('scan')
   .description('Scan project dependencies for issues')
@@ -428,6 +567,7 @@ program
   .option('-f, --format <format>', 'output format (console, json, csv, html)')
   .option('-o, --output <file>', 'output file path')
   .option('-c, --config <path>', 'path to config file')
+  .option('-a, --advanced', 'perform advanced dependency analysis', false)
   .action(async (options) => {
     try {
       const config = await loadConfig(options.config);
@@ -479,6 +619,12 @@ program
         return;
       }
 
+      let treeAnalysis = null;
+      if (options.advanced) {
+        console.log(chalk.yellow('\nPerforming advanced dependency analysis...'));
+        treeAnalysis = await analyzeDependencyTree(options.path);
+      }
+
       const format = options.format || config.output.defaultFormat;
       const outputPath = options.output || 
         (format !== 'console' ? path.join(config.output.reportsDir, `report.${format}`) : null);
@@ -489,8 +635,11 @@ program
 
       if (format === 'console' && !config.output.silent) {
         displayResults(results);
+        if (treeAnalysis) {
+          displayAdvancedAnalysis(treeAnalysis);
+        }
       } else if (formatters[format]) {
-        const output = await formatters[format](results, outputPath);
+        const output = await formatters[format]({ results, treeAnalysis }, outputPath);
         if (outputPath) {
           console.log(chalk.green(output));
         } else {
