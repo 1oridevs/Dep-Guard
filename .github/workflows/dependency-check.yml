@@ -1,0 +1,41 @@
+name: Dependency Guardian Check
+
+on:
+  push:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'yarn.lock'
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'yarn.lock'
+  schedule:
+    - cron: '0 0 * * 1'
+
+jobs:
+  check-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install Dependency Guardian
+        run: npm install -g dependency-guardian
+      
+      - name: Run Dependency Check
+        run: dependency-guardian scan --include-dev --format json --output dependency-report.json
+        continue-on-error: true
+      
+      - name: Upload Scan Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-scan-results
+          path: dependency-report.json 

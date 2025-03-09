@@ -16,6 +16,15 @@ const madge = require('madge');
 const yaml = require('js-yaml');
 const glob = require('glob');
 const fsSync = require('fs');
+const ora = require('ora');
+const cliProgress = require('cli-progress');
+const pLimit = require('p-limit');
+const NodeCache = require('node-cache');
+
+const registryCache = new NodeCache({ 
+  stdTTL: 3600,
+  checkperiod: 120
+});
 
 // Ensure policies directory exists
 if (!fsSync.existsSync('policies')) {
@@ -104,16 +113,26 @@ async function readPackageJson(projectPath) {
 }
 
 async function getPackageInfo(packageName) {
+  const cacheKey = `pkg:${packageName}`;
+  const cached = registryCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const response = await axios.get(`https://registry.npmjs.org/${packageName}`);
     const latestVersion = response.data['dist-tags'].latest;
     const license = response.data.versions[latestVersion].license || 'Unknown';
     const versions = Object.keys(response.data.versions);
-    return { 
+    
+    const result = { 
       latestVersion, 
       license,
       versions: versions.filter(v => semver.valid(v)).sort(semver.rcompare)
     };
+
+    registryCache.set(cacheKey, result);
+    return result;
   } catch (error) {
     return { 
       latestVersion: null, 
@@ -190,25 +209,47 @@ function checkLicenseCompliance(license, allowedLicenses) {
 
 async function scanDependencies(dependencies, type = 'dependencies', allowedLicenses, vulnerabilities, rules) {
   const results = [];
-  
-  for (const [name, version] of Object.entries(dependencies)) {
-    const { latestVersion, license, versions } = await getPackageInfo(name);
-    const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(version, latestVersion, versions);
-    const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
-    const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
+  const limit = pLimit(5);
+  const spinner = ora('Scanning dependencies...').start();
+  const progressBar = new cliProgress.SingleBar({
+    format: 'Scanning |{bar}| {percentage}% | {value}/{total} packages',
+    barCompleteChar: '=',
+    barIncompleteChar: '-'
+  });
+
+  try {
+    const total = Object.keys(dependencies).length;
+    progressBar.start(total, 0);
     
-    results.push({
-      name,
-      type,
-      currentVersion: version,
-      latestVersion: latestVersion || 'Unknown',
-      suggestedUpdate,
-      license,
-      versionStatus,
-      licenseStatus,
-      vulnLevel,
-      vulnCount
-    });
+    const promises = Object.entries(dependencies).map(([name, version]) => 
+      limit(async () => {
+        const { latestVersion, license, versions } = await getPackageInfo(name);
+        const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(version, latestVersion, versions);
+        const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
+        const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
+        
+        progressBar.increment();
+        
+        return {
+          name,
+          type,
+          currentVersion: version,
+          latestVersion: latestVersion || 'Unknown',
+          suggestedUpdate,
+          license,
+          versionStatus,
+          licenseStatus,
+          vulnLevel,
+          vulnCount
+        };
+      })
+    );
+
+    const scannedResults = await Promise.all(promises);
+    results.push(...scannedResults);
+  } finally {
+    spinner.stop();
+    progressBar.stop();
   }
   
   return results;
@@ -918,6 +959,30 @@ program
       console.error(chalk.red(`\nError: ${error.message}`));
       process.exit(1);
     }
+  });
+
+program
+  .command('cache')
+  .description('Manage package registry cache')
+  .option('--clear', 'Clear the cache')
+  .option('--stats', 'Show cache statistics')
+  .action((options) => {
+    if (options.clear) {
+      registryCache.flushAll();
+      console.log(chalk.green('Cache cleared successfully'));
+      return;
+    }
+    
+    if (options.stats) {
+      const stats = registryCache.getStats();
+      console.log(chalk.bold('\nCache Statistics:'));
+      console.log(`Hits: ${chalk.green(stats.hits)}`);
+      console.log(`Misses: ${chalk.yellow(stats.misses)}`);
+      console.log(`Keys: ${chalk.blue(registryCache.keys().length)}`);
+      return;
+    }
+    
+    program.help();
   });
 
 program.on('command:*', function () {
