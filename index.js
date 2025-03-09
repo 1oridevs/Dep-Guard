@@ -5,6 +5,9 @@ const chalk = require('chalk');
 const path = require('path');
 const fs = require('fs').promises;
 const axios = require('axios');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 const program = new Command();
 
 program
@@ -33,6 +36,35 @@ async function getPackageInfo(packageName) {
   }
 }
 
+async function getVulnerabilities(projectPath) {
+  try {
+    const { stdout } = await execPromise('npm audit --json', { cwd: projectPath });
+    const auditData = JSON.parse(stdout);
+    return auditData.vulnerabilities || {};
+  } catch (error) {
+    if (error.stdout) {
+      return JSON.parse(error.stdout).vulnerabilities || {};
+    }
+    return {};
+  }
+}
+
+function getSeverityLevel(vulnerabilities) {
+  if (!vulnerabilities) return { level: 'NONE', count: 0 };
+  
+  const severityLevels = ['critical', 'high', 'moderate', 'low'];
+  let totalVulnerabilities = 0;
+  
+  for (const level of severityLevels) {
+    if (vulnerabilities[level]) {
+      totalVulnerabilities += vulnerabilities[level];
+      return { level: level.toUpperCase(), count: totalVulnerabilities };
+    }
+  }
+  
+  return { level: 'NONE', count: 0 };
+}
+
 function compareVersions(current, latest) {
   if (!latest) return 'ERROR';
   if (current.startsWith('^') || current.startsWith('~')) {
@@ -46,13 +78,14 @@ function checkLicenseCompliance(license, allowedLicenses) {
   return allowedLicenses.includes(license) ? 'COMPLIANT' : 'NON-COMPLIANT';
 }
 
-async function scanDependencies(dependencies, type = 'dependencies', allowedLicenses) {
+async function scanDependencies(dependencies, type = 'dependencies', allowedLicenses, vulnerabilities) {
   const results = [];
   
   for (const [name, version] of Object.entries(dependencies)) {
     const { latestVersion, license } = await getPackageInfo(name);
     const versionStatus = compareVersions(version, latestVersion);
     const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
+    const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
     
     results.push({
       name,
@@ -61,7 +94,9 @@ async function scanDependencies(dependencies, type = 'dependencies', allowedLice
       latestVersion: latestVersion || 'Unknown',
       license,
       versionStatus,
-      licenseStatus
+      licenseStatus,
+      vulnLevel,
+      vulnCount
     });
   }
   
@@ -79,7 +114,7 @@ function displayResults(results) {
 
   Object.entries(grouped).forEach(([type, deps]) => {
     console.log(chalk.cyan.bold(`\n${type}:`));
-    deps.forEach(({ name, currentVersion, latestVersion, license, versionStatus, licenseStatus }) => {
+    deps.forEach(({ name, currentVersion, latestVersion, license, versionStatus, licenseStatus, vulnLevel, vulnCount }) => {
       const versionStatusColor = {
         'UP-TO-DATE': 'green',
         'UPDATE AVAILABLE': 'yellow',
@@ -91,13 +126,26 @@ function displayResults(results) {
         'NON-COMPLIANT': 'red',
         'UNKNOWN': 'yellow'
       }[licenseStatus];
+
+      const vulnColor = {
+        'NONE': 'green',
+        'LOW': 'blue',
+        'MODERATE': 'yellow',
+        'HIGH': 'red',
+        'CRITICAL': 'redBright'
+      }[vulnLevel];
+      
+      const vulnText = vulnLevel === 'NONE' 
+        ? 'No vulnerabilities' 
+        : `${vulnCount} ${vulnLevel.toLowerCase()} severity`;
       
       console.log(
         `${chalk.bold(name)} - ` +
         `Current: ${chalk.blue(currentVersion)} | ` +
         `Latest: ${chalk.blue(latestVersion)} | ` +
         `License: ${chalk[licenseStatusColor](license)} | ` +
-        `Version: ${chalk[versionStatusColor](versionStatus)}`
+        `Version: ${chalk[versionStatusColor](versionStatus)} | ` +
+        `Security: ${chalk[vulnColor](vulnText)}`
       );
     });
   });
@@ -106,14 +154,16 @@ function displayResults(results) {
 }
 
 function displaySummary(results) {
-  const summary = results.reduce((acc, { versionStatus, licenseStatus }) => {
+  const summary = results.reduce((acc, { versionStatus, licenseStatus, vulnLevel }) => {
     acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
     acc.licenses[licenseStatus] = (acc.licenses[licenseStatus] || 0) + 1;
+    acc.vulnerabilities[vulnLevel] = (acc.vulnerabilities[vulnLevel] || 0) + 1;
     return acc;
-  }, { versions: {}, licenses: {} });
+  }, { versions: {}, licenses: {}, vulnerabilities: {} });
 
   console.log(chalk.bold('\nSummary:'));
   console.log('----------------------------------------');
+  
   console.log(chalk.bold('\nVersion Status:'));
   console.log(`✅ Up-to-date: ${chalk.green(summary.versions['UP-TO-DATE'] || 0)}`);
   console.log(`⚠️  Updates available: ${chalk.yellow(summary.versions['UPDATE AVAILABLE'] || 0)}`);
@@ -123,6 +173,13 @@ function displaySummary(results) {
   console.log(`✅ Compliant: ${chalk.green(summary.licenses['COMPLIANT'] || 0)}`);
   console.log(`❌ Non-compliant: ${chalk.red(summary.licenses['NON-COMPLIANT'] || 0)}`);
   console.log(`⚠️  Unknown: ${chalk.yellow(summary.licenses['UNKNOWN'] || 0)}`);
+  
+  console.log(chalk.bold('\nSecurity Status:'));
+  console.log(`✅ No vulnerabilities: ${chalk.green(summary.vulnerabilities['NONE'] || 0)}`);
+  console.log(`ℹ️  Low severity: ${chalk.blue(summary.vulnerabilities['LOW'] || 0)}`);
+  console.log(`⚠️  Moderate severity: ${chalk.yellow(summary.vulnerabilities['MODERATE'] || 0)}`);
+  console.log(`❌ High severity: ${chalk.red(summary.vulnerabilities['HIGH'] || 0)}`);
+  console.log(`💀 Critical severity: ${chalk.redBright(summary.vulnerabilities['CRITICAL'] || 0)}`);
   
   console.log(`\n📦 Total packages scanned: ${chalk.blue(results.length)}`);
   console.log('----------------------------------------\n');
@@ -144,15 +201,26 @@ program
       console.log(chalk.dim(`Allowed licenses: ${allowedLicenses.join(', ')}`));
       
       const packageJson = await readPackageJson(options.path);
+      const vulnerabilities = await getVulnerabilities(options.path);
       let results = [];
 
       if (Object.keys(packageJson.dependencies || {}).length > 0) {
-        const dependencyResults = await scanDependencies(packageJson.dependencies || {}, 'dependencies', allowedLicenses);
+        const dependencyResults = await scanDependencies(
+          packageJson.dependencies || {}, 
+          'dependencies', 
+          allowedLicenses,
+          vulnerabilities
+        );
         results = results.concat(dependencyResults);
       }
 
       if (options.includeDev && Object.keys(packageJson.devDependencies || {}).length > 0) {
-        const devDependencyResults = await scanDependencies(packageJson.devDependencies || {}, 'devDependencies', allowedLicenses);
+        const devDependencyResults = await scanDependencies(
+          packageJson.devDependencies || {}, 
+          'devDependencies', 
+          allowedLicenses,
+          vulnerabilities
+        );
         results = results.concat(devDependencyResults);
       }
 
