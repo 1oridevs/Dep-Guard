@@ -643,6 +643,7 @@ program
   .option('-c, --config <path>', 'path to config file')
   .option('-a, --advanced', 'perform advanced dependency analysis', false)
   .option('-P, --policy <name>', 'policy to use for scanning')
+  .option('--ci', 'Run in CI mode (stricter checks, exit codes)', false)
   .action(async (options) => {
     try {
       let config = await loadConfig(options.config);
@@ -884,6 +885,32 @@ program
     }
   });
 
+program
+  .command('ci')
+  .description('CI/CD integration utilities')
+  .option('--init <type>', 'Initialize CI integration (github, gitlab, jenkins)', 'github')
+  .option('--hooks', 'Install git hooks')
+  .option('--check-only', 'Exit with error code on issues')
+  .action(async (options) => {
+    try {
+      if (options.init) {
+        await initializeCIIntegration(options.init);
+      }
+      
+      if (options.hooks) {
+        await installGitHooks();
+      }
+      
+      if (options.checkOnly) {
+        const results = await runCICheck();
+        process.exit(results.hasIssues ? 1 : 0);
+      }
+    } catch (error) {
+      console.error(chalk.red(`\nError: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
 program.on('command:*', function () {
   console.error(chalk.red('Invalid command: %s\nSee --help for a list of available commands.'), program.args.join(' '));
   process.exit(1);
@@ -1027,4 +1054,87 @@ Generated on: ${new Date().toISOString()}
   };
   
   return templates[template] || templates.default;
+}
+
+async function performFullScan(config) {
+  const packageJson = await readPackageJson(config.path || '.');
+  const vulnerabilities = await getVulnerabilities(config.path || '.');
+  let results = [];
+
+  if (Object.keys(packageJson.dependencies || {}).length > 0) {
+    const dependencyResults = await scanDependencies(
+      packageJson.dependencies,
+      'dependencies',
+      config.allowedLicenses,
+      vulnerabilities
+    );
+    results = results.concat(dependencyResults);
+  }
+
+  if (config.includeDev && Object.keys(packageJson.devDependencies || {}).length > 0) {
+    const devDependencyResults = await scanDependencies(
+      packageJson.devDependencies,
+      'devDependencies',
+      config.allowedLicenses,
+      vulnerabilities
+    );
+    results = results.concat(devDependencyResults);
+  }
+
+  return results;
+}
+
+async function initializeCIIntegration(type) {
+  const templates = {
+    github: {
+      source: path.join(__dirname, 'templates', 'github-workflow.yml'),
+      target: '.github/workflows/dependency-check.yml'
+    },
+    gitlab: {
+      source: path.join(__dirname, 'templates', 'gitlab-ci.yml'),
+      target: '.gitlab-ci.yml'
+    },
+    jenkins: {
+      source: path.join(__dirname, 'templates', 'Jenkinsfile'),
+      target: 'Jenkinsfile'
+    }
+  };
+
+  const template = templates[type];
+  if (!template) {
+    throw new Error(`Unsupported CI type: ${type}`);
+  }
+
+  await fs.mkdir(path.dirname(template.target), { recursive: true });
+  await fs.copyFile(template.source, template.target);
+  console.log(chalk.green(`✅ ${type} CI configuration initialized`));
+}
+
+async function installGitHooks() {
+  const hookPath = '.git/hooks/pre-commit';
+  const templatePath = path.join(__dirname, 'templates', 'pre-commit');
+  
+  await fs.mkdir(path.dirname(hookPath), { recursive: true });
+  await fs.copyFile(templatePath, hookPath);
+  await fs.chmod(hookPath, '755');
+  
+  console.log(chalk.green('✅ Git hooks installed'));
+}
+
+async function runCICheck() {
+  const config = await loadConfig();
+  const results = await performFullScan(config);
+  
+  const hasHighSeverity = results.some(r => 
+    ['HIGH', 'CRITICAL'].includes(r.vulnLevel)
+  );
+  
+  const hasForbiddenLicense = results.some(r => 
+    r.licenseStatus === 'NON-COMPLIANT'
+  );
+  
+  return {
+    hasIssues: hasHighSeverity || hasForbiddenLicense,
+    results
+  };
 }
