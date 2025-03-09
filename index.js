@@ -39,7 +39,7 @@ function compareVersions(current, latest) {
   return current === latest ? 'UP-TO-DATE' : 'UPDATE AVAILABLE';
 }
 
-async function scanDependencies(dependencies) {
+async function scanDependencies(dependencies, type = 'dependencies') {
   const results = [];
   
   for (const [name, version] of Object.entries(dependencies)) {
@@ -48,6 +48,7 @@ async function scanDependencies(dependencies) {
     
     results.push({
       name,
+      type,
       currentVersion: version,
       latestVersion: latestVersion || 'Unknown',
       status
@@ -60,26 +61,53 @@ async function scanDependencies(dependencies) {
 function displayResults(results) {
   console.log('\nDependency Scan Results:\n');
   
-  results.forEach(({ name, currentVersion, latestVersion, status }) => {
-    const statusColor = {
-      'UP-TO-DATE': 'green',
-      'UPDATE AVAILABLE': 'yellow',
-      'ERROR': 'red'
-    }[status];
-    
-    console.log(
-      `${chalk.bold(name)} - ` +
-      `Current: ${chalk.blue(currentVersion)} | ` +
-      `Latest: ${chalk.blue(latestVersion)} | ` +
-      `Status: ${chalk[statusColor](status)}`
-    );
+  const grouped = results.reduce((acc, result) => {
+    if (!acc[result.type]) acc[result.type] = [];
+    acc[result.type].push(result);
+    return acc;
+  }, {});
+
+  Object.entries(grouped).forEach(([type, deps]) => {
+    console.log(chalk.cyan.bold(`\n${type}:`));
+    deps.forEach(({ name, currentVersion, latestVersion, status }) => {
+      const statusColor = {
+        'UP-TO-DATE': 'green',
+        'UPDATE AVAILABLE': 'yellow',
+        'ERROR': 'red'
+      }[status];
+      
+      console.log(
+        `${chalk.bold(name)} - ` +
+        `Current: ${chalk.blue(currentVersion)} | ` +
+        `Latest: ${chalk.blue(latestVersion)} | ` +
+        `Status: ${chalk[statusColor](status)}`
+      );
+    });
   });
+
+  displaySummary(results);
+}
+
+function displaySummary(results) {
+  const summary = results.reduce((acc, { status }) => {
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+
+  console.log(chalk.bold('\nSummary:'));
+  console.log('----------------------------------------');
+  console.log(`✅ Up-to-date: ${chalk.green(summary['UP-TO-DATE'] || 0)}`);
+  console.log(`⚠️  Updates available: ${chalk.yellow(summary['UPDATE AVAILABLE'] || 0)}`);
+  console.log(`❌ Errors: ${chalk.red(summary['ERROR'] || 0)}`);
+  console.log(`📦 Total packages scanned: ${chalk.blue(results.length)}`);
+  console.log('----------------------------------------\n');
 }
 
 program
   .command('scan')
   .description('Scan project dependencies for issues')
   .option('-p, --path <path>', 'path to project directory', '.')
+  .option('-d, --include-dev', 'include devDependencies in scan', false)
   .action(async (options) => {
     try {
       displayWelcome();
@@ -87,9 +115,23 @@ program
       console.log(chalk.dim(`Project path: ${options.path}`));
       
       const packageJson = await readPackageJson(options.path);
-      const dependencies = packageJson.dependencies || {};
-      
-      const results = await scanDependencies(dependencies);
+      let results = [];
+
+      if (Object.keys(packageJson.dependencies || {}).length > 0) {
+        const dependencyResults = await scanDependencies(packageJson.dependencies || {}, 'dependencies');
+        results = results.concat(dependencyResults);
+      }
+
+      if (options.includeDev && Object.keys(packageJson.devDependencies || {}).length > 0) {
+        const devDependencyResults = await scanDependencies(packageJson.devDependencies || {}, 'devDependencies');
+        results = results.concat(devDependencyResults);
+      }
+
+      if (results.length === 0) {
+        console.log(chalk.yellow('\nNo dependencies found to scan!'));
+        return;
+      }
+
       displayResults(results);
       
     } catch (error) {
