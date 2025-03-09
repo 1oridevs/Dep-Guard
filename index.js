@@ -231,12 +231,160 @@ function displaySummary(results) {
   console.log('----------------------------------------\n');
 }
 
+const formatters = {
+  async json(results, outputPath) {
+    const output = {
+      timestamp: new Date().toISOString(),
+      summary: generateSummary(results),
+      results: results
+    };
+    
+    if (outputPath) {
+      await fs.writeFile(outputPath, JSON.stringify(output, null, 2));
+      return `JSON report saved to: ${outputPath}`;
+    }
+    return JSON.stringify(output, null, 2);
+  },
+
+  async csv(results, outputPath) {
+    const headers = [
+      'Package Name',
+      'Type',
+      'Current Version',
+      'Latest Version',
+      'Suggested Update',
+      'License',
+      'Version Status',
+      'License Status',
+      'Security Level',
+      'Vulnerabilities Count'
+    ].join(',');
+
+    const rows = results.map(r => [
+      r.name,
+      r.type,
+      r.currentVersion,
+      r.latestVersion,
+      r.suggestedUpdate || 'N/A',
+      r.license,
+      r.versionStatus,
+      r.licenseStatus,
+      r.vulnLevel,
+      r.vulnCount
+    ].join(','));
+
+    const csv = [headers, ...rows].join('\n');
+    
+    if (outputPath) {
+      await fs.writeFile(outputPath, csv);
+      return `CSV report saved to: ${outputPath}`;
+    }
+    return csv;
+  },
+
+  async html(results, outputPath) {
+    const template = `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Dependency Guardian Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .header { background: #f0f0f0; padding: 20px; border-radius: 5px; }
+    .summary { margin: 20px 0; }
+    .dependencies { border-collapse: collapse; width: 100%; }
+    .dependencies th, .dependencies td { 
+      border: 1px solid #ddd; 
+      padding: 8px; 
+      text-align: left; 
+    }
+    .dependencies th { background: #f0f0f0; }
+    .up-to-date { color: green; }
+    .major { color: red; }
+    .minor { color: orange; }
+    .patch { color: blue; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Dependency Guardian Report</h1>
+    <p>Generated on: ${new Date().toLocaleString()}</p>
+  </div>
+  
+  <div class="summary">
+    <h2>Summary</h2>
+    <pre>${JSON.stringify(generateSummary(results), null, 2)}</pre>
+  </div>
+
+  <h2>Dependencies</h2>
+  <table class="dependencies">
+    <thead>
+      <tr>
+        <th>Package</th>
+        <th>Type</th>
+        <th>Current</th>
+        <th>Latest</th>
+        <th>Suggested</th>
+        <th>License</th>
+        <th>Version Status</th>
+        <th>License Status</th>
+        <th>Security</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${results.map(r => `
+        <tr>
+          <td>${r.name}</td>
+          <td>${r.type}</td>
+          <td>${r.currentVersion}</td>
+          <td>${r.latestVersion}</td>
+          <td>${r.suggestedUpdate || 'N/A'}</td>
+          <td>${r.license}</td>
+          <td class="${r.versionStatus.toLowerCase()}">${r.versionStatus}</td>
+          <td>${r.licenseStatus}</td>
+          <td>${r.vulnLevel} (${r.vulnCount})</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+</body>
+</html>`;
+    
+    if (outputPath) {
+      await fs.writeFile(outputPath, template);
+      return `HTML report saved to: ${outputPath}`;
+    }
+    return template;
+  }
+};
+
+function generateSummary(results) {
+  return results.reduce((acc, { versionStatus, licenseStatus, vulnLevel }) => {
+    if (['major', 'minor', 'patch'].includes(versionStatus)) {
+      acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
+    } else {
+      acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
+    }
+    acc.licenses[licenseStatus] = (acc.licenses[licenseStatus] || 0) + 1;
+    acc.vulnerabilities[vulnLevel] = (acc.vulnerabilities[vulnLevel] || 0) + 1;
+    return acc;
+  }, { 
+    versions: {}, 
+    licenses: {}, 
+    vulnerabilities: {},
+    totalPackages: results.length
+  });
+}
+
 program
   .command('scan')
   .description('Scan project dependencies for issues')
   .option('-p, --path <path>', 'path to project directory', '.')
   .option('-d, --include-dev', 'include devDependencies in scan', false)
   .option('-l, --licenses <licenses>', 'allowed licenses (comma-separated)', 'MIT,ISC,Apache-2.0,BSD-3-Clause')
+  .option('-f, --format <format>', 'output format (console, json, csv, html)', 'console')
+  .option('-o, --output <file>', 'output file path')
   .action(async (options) => {
     try {
       displayWelcome();
@@ -275,7 +423,19 @@ program
         return;
       }
 
-      displayResults(results);
+      if (options.format === 'console') {
+        displayResults(results);
+      } else if (formatters[options.format]) {
+        const output = await formatters[options.format](results, options.output);
+        if (options.output) {
+          console.log(chalk.green(output));
+        } else {
+          console.log(output);
+        }
+      } else {
+        console.error(chalk.red(`Unsupported format: ${options.format}`));
+        process.exit(1);
+      }
       
     } catch (error) {
       console.error(chalk.red(`\nError: ${error.message}`));
