@@ -902,8 +902,17 @@ program
       }
       
       if (options.checkOnly) {
-        const results = await runCICheck();
-        process.exit(results.hasIssues ? 1 : 0);
+        const { hasIssues, results, error } = await runCICheck();
+        if (error) {
+          console.error(chalk.red(`CI check failed: ${error}`));
+          process.exit(1);
+        }
+        if (hasIssues) {
+          console.error(chalk.red('Issues found during CI check'));
+          displayResults(results);
+          process.exit(1);
+        }
+        console.log(chalk.green('CI check passed'));
       }
     } catch (error) {
       console.error(chalk.red(`\nError: ${error.message}`));
@@ -1122,19 +1131,41 @@ async function installGitHooks() {
 }
 
 async function runCICheck() {
-  const config = await loadConfig();
-  const results = await performFullScan(config);
-  
-  const hasHighSeverity = results.some(r => 
-    ['HIGH', 'CRITICAL'].includes(r.vulnLevel)
-  );
-  
-  const hasForbiddenLicense = results.some(r => 
-    r.licenseStatus === 'NON-COMPLIANT'
-  );
-  
-  return {
-    hasIssues: hasHighSeverity || hasForbiddenLicense,
-    results
+  const defaultConfig = {
+    path: '.',
+    includeDev: true,
+    allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause']
   };
+  
+  let config;
+  try {
+    config = await loadConfig();
+  } catch (error) {
+    console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
+    config = defaultConfig;
+  }
+
+  try {
+    const results = await performFullScan(config);
+    
+    const hasHighSeverity = results.some(r => 
+      ['HIGH', 'CRITICAL'].includes(r.vulnLevel)
+    );
+    
+    const hasForbiddenLicense = results.some(r => 
+      r.licenseStatus === 'NON-COMPLIANT'
+    );
+    
+    return {
+      hasIssues: hasHighSeverity || hasForbiddenLicense,
+      results
+    };
+  } catch (error) {
+    console.error(chalk.red('Error during CI check:', error.message));
+    return {
+      hasIssues: true,
+      results: [],
+      error: error.message
+    };
+  }
 }
