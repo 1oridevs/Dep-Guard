@@ -202,12 +202,17 @@ function analyzeVersionChange(current, latest, allVersions) {
   };
 }
 
-function checkLicenseCompliance(license, allowedLicenses) {
+function checkLicenseCompliance(license, allowedLicenses = []) {
   if (!license || license === 'Unknown') return 'UNKNOWN';
   return allowedLicenses.includes(license) ? 'COMPLIANT' : 'NON-COMPLIANT';
 }
 
 async function scanDependencies(dependencies, type = 'dependencies', allowedLicenses, vulnerabilities, rules) {
+  if (!Array.isArray(allowedLicenses)) {
+    console.warn(chalk.yellow('Warning: allowedLicenses is not an array, using empty array'));
+    allowedLicenses = [];
+  }
+
   const results = [];
   const limit = pLimit(5);
   const spinner = ora('Scanning dependencies...').start();
@@ -256,59 +261,121 @@ async function scanDependencies(dependencies, type = 'dependencies', allowedLice
 }
 
 function displayResults(results) {
+  if (!results || results.length === 0) {
+    console.log(chalk.yellow('\nNo dependencies found.'));
+    return;
+  }
+
   console.log('\nDependency Scan Results:\n');
   
+  // Group by type (dependencies/devDependencies)
   const grouped = results.reduce((acc, result) => {
     if (!acc[result.type]) acc[result.type] = [];
     acc[result.type].push(result);
     return acc;
   }, {});
 
-  Object.entries(grouped).forEach(([type, deps]) => {
-    console.log(chalk.cyan.bold(`\n${type}:`));
-    deps.forEach(({ name, currentVersion, latestVersion, suggestedUpdate, license, versionStatus, licenseStatus, vulnLevel, vulnCount }) => {
-      const versionStatusColor = {
+  // Display each group
+  for (const [type, deps] of Object.entries(grouped)) {
+    console.log(chalk.bold(`\n${type}:`));
+    
+    deps.forEach(dep => {
+      const nameColor = dep.vulnLevel === 'NONE' ? 'white' : 'red';
+      console.log(
+        chalk[nameColor](`\n${dep.name}`) +
+        chalk.dim(` (${dep.currentVersion} → ${dep.latestVersion})`)
+      );
+
+      // Version status
+      const statusColor = {
         'UP-TO-DATE': 'green',
-        'major': 'red',
+        'patch': 'yellow',
         'minor': 'yellow',
-        'patch': 'blue',
+        'major': 'red',
         'ERROR': 'red'
-      }[versionStatus];
+      }[dep.versionStatus] || 'white';
 
-      const versionText = suggestedUpdate ? 
-        `${versionStatus.toUpperCase()} update available (${suggestedUpdate})` :
-        versionStatus;
+      console.log(
+        chalk.dim('Status: ') +
+        chalk[statusColor](dep.versionStatus) +
+        (dep.suggestedUpdate ? chalk.dim(` (suggested: ${dep.suggestedUpdate})`) : '')
+      );
 
-      const licenseStatusColor = {
+      // License status
+      const licenseColor = {
         'COMPLIANT': 'green',
         'NON-COMPLIANT': 'red',
         'UNKNOWN': 'yellow'
-      }[licenseStatus];
+      }[dep.licenseStatus];
 
-      const vulnColor = {
-        'NONE': 'green',
-        'LOW': 'blue',
-        'MODERATE': 'yellow',
-        'HIGH': 'red',
-        'CRITICAL': 'redBright'
-      }[vulnLevel];
-      
-      const vulnText = vulnLevel === 'NONE' 
-        ? 'No vulnerabilities' 
-        : `${vulnCount} ${vulnLevel.toLowerCase()} severity`;
-      
       console.log(
-        `${chalk.bold(name)} - ` +
-        `Current: ${chalk.blue(currentVersion)} | ` +
-        `Latest: ${chalk.blue(latestVersion)} | ` +
-        `Update: ${chalk[versionStatusColor](versionText)} | ` +
-        `License: ${chalk[licenseStatusColor](license)} | ` +
-        `Security: ${chalk[vulnColor](vulnText)}`
+        chalk.dim('License: ') +
+        chalk[licenseColor](`${dep.license} (${dep.licenseStatus})`)
       );
+
+      // Vulnerabilities
+      if (dep.vulnLevel !== 'NONE') {
+        console.log(
+          chalk.dim('Vulnerabilities: ') +
+          chalk.red(`${dep.vulnCount} (${dep.vulnLevel})`)
+        );
+      }
     });
+  }
+
+  // Print summary
+  const summary = results.reduce((acc, dep) => {
+    // Count by version status
+    if (!acc.versions[dep.versionStatus]) {
+      acc.versions[dep.versionStatus] = 0;
+    }
+    acc.versions[dep.versionStatus]++;
+
+    // Count by license status
+    if (!acc.licenses[dep.licenseStatus]) {
+      acc.licenses[dep.licenseStatus] = 0;
+    }
+    acc.licenses[dep.licenseStatus]++;
+
+    // Count vulnerabilities
+    if (!acc.vulnerabilities[dep.vulnLevel]) {
+      acc.vulnerabilities[dep.vulnLevel] = 0;
+    }
+    acc.vulnerabilities[dep.vulnLevel]++;
+
+    return acc;
+  }, { versions: {}, licenses: {}, vulnerabilities: {} });
+
+  console.log(chalk.bold('\nSummary:'));
+  
+  console.log(chalk.dim('\nVersion Status:'));
+  Object.entries(summary.versions).forEach(([status, count]) => {
+    const color = {
+      'UP-TO-DATE': 'green',
+      'patch': 'yellow',
+      'minor': 'yellow',
+      'major': 'red',
+      'ERROR': 'red'
+    }[status] || 'white';
+    console.log(chalk[color](`${status}: ${count}`));
   });
 
-  displaySummary(results);
+  console.log(chalk.dim('\nLicense Compliance:'));
+  Object.entries(summary.licenses).forEach(([status, count]) => {
+    const color = {
+      'COMPLIANT': 'green',
+      'NON-COMPLIANT': 'red',
+      'UNKNOWN': 'yellow'
+    }[status] || 'white';
+    console.log(chalk[color](`${status}: ${count}`));
+  });
+
+  console.log(chalk.dim('\nVulnerabilities:'));
+  Object.entries(summary.vulnerabilities)
+    .filter(([level]) => level !== 'NONE')
+    .forEach(([level, count]) => {
+      console.log(chalk.red(`${level}: ${count}`));
+    });
 }
 
 function displaySummary(results) {
@@ -676,139 +743,137 @@ function displayAdvancedAnalysis(treeAnalysis) {
 program
   .command('scan')
   .description('Scan project dependencies for issues')
-  .option('-p, --path <path>', 'path to project directory', '.')
-  .option('-d, --include-dev', 'include devDependencies in scan', false)
-  .option('-l, --licenses <licenses>', 'allowed licenses (comma-separated)')
-  .option('-f, --format <format>', 'output format (console, json, csv, html)')
+  .option('-p, --path <path>', 'project path')
+  .option('-i, --include-dev', 'include devDependencies')
+  .option('-f, --format <format>', 'output format (console, json, csv)', 'console')
   .option('-o, --output <file>', 'output file path')
-  .option('-c, --config <path>', 'path to config file')
   .option('-a, --advanced', 'perform advanced dependency analysis', false)
   .option('-P, --policy <name>', 'policy to use for scanning')
   .option('--ci', 'Run in CI mode (stricter checks, exit codes)', false)
+  .option('--filter-status <status>', 'Filter by update status (comma-separated: UP-TO-DATE,major,minor,patch)')
+  .option('--filter-name <pattern>', 'Filter by package name pattern')
+  .option('--filter-license <licenses>', 'Filter by license (comma-separated)')
+  .option('--filter-severity <levels>', 'Filter by vulnerability severity (comma-separated: HIGH,CRITICAL,MODERATE,LOW)')
+  .option('--deps-only', 'Show only dependencies')
+  .option('--dev-deps-only', 'Show only devDependencies')
+  .option('--sort <field>', 'Sort by field (name, version, license, severity)', 'name')
+  .option('--reverse', 'Reverse sort order')
   .action(async (options) => {
+    let config;
     try {
-      let config = await loadConfig(options.config);
-      
-      if (options.policy) {
-        const policyFiles = glob.sync('policies/**/*.{json,yaml,yml}');
-        const policies = await loadPolicies(policyFiles);
-        const resolvedPolicies = await resolvePolicyInheritance(policies);
-        
-        const policy = resolvedPolicies.get(options.policy);
-        if (!policy) {
-          console.error(chalk.red(`Policy "${options.policy}" not found`));
-          process.exit(1);
+      const defaultConfig = {
+        path: options.path || '.',
+        includeDev: options.includeDev || false,
+        allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
+        output: {
+          format: options.format || 'console',
+          silent: false,
+          debug: false
+        },
+        rules: {
+          dependencies: {},
+          devDependencies: {}
+        },
+        notifications: {
+          exitOnHighSeverity: false,
+          exitOnForbiddenLicense: false
         }
-        
-        // Merge policy with config
-        config = deepMerge(config, {
-          allowedLicenses: policy.rules.licenses.allowed,
-          rules: {
-            dependencies: {
-              maxAge: policy.rules.versioning.maxAge,
-              forbiddenLicenses: policy.rules.licenses.forbidden,
-              requireLicense: policy.rules.licenses.unknown === 'error'
-            }
-          },
-          notifications: {
-            exitOnHighSeverity: policy.rules.security.maxSeverity !== 'critical',
-            exitOnForbiddenLicense: true
-          }
-        });
+      };
+
+      try {
+        const explorer = cosmiconfig('depguard');
+        const result = await explorer.search();
+        config = result ? {
+          ...deepMerge(defaultConfig, result.config),
+          allowedLicenses: result.config.allowedLicenses || defaultConfig.allowedLicenses
+        } : defaultConfig;
+      } catch (error) {
+        console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
+        config = defaultConfig;
       }
-      
+
       if (!config.output.silent) {
         displayWelcome();
         console.log(chalk.yellow('Scanning dependencies...'));
-        console.log(chalk.dim(`Project path: ${options.path}`));
+        console.log(chalk.dim(`Project path: ${config.path}`));
       }
 
-      const allowedLicenses = options.licenses
-        ? options.licenses.split(',').map(l => l.trim())
-        : config.allowedLicenses;
+      const results = await performFullScan(config);
 
-      if (config.output.debug) {
-        console.log(chalk.dim('Config:', JSON.stringify(config, null, 2)));
-      }
-      
-      const packageJson = await readPackageJson(options.path);
-      const vulnerabilities = await getVulnerabilities(options.path);
-      let results = [];
+      // Apply filters
+      const filters = {
+        status: options.filterStatus?.split(','),
+        name: options.filterName,
+        license: options.filterLicense?.split(','),
+        severity: options.filterSeverity?.split(','),
+        type: options.depsOnly ? 'dependencies' : 
+              options.devDepsOnly ? 'devDependencies' : null
+      };
 
-      if (Object.keys(packageJson.dependencies || {}).length > 0) {
-        const filteredDeps = filterDependencies(packageJson.dependencies, config.ignorePatterns);
-        const dependencyResults = await scanDependencies(
-          filteredDeps,
-          'dependencies',
-          allowedLicenses,
-          vulnerabilities,
-          config.rules.dependencies
-        );
-        results = results.concat(dependencyResults);
-      }
+      let filteredResults = filterDependencies(results, filters);
 
-      if (options.includeDev && Object.keys(packageJson.devDependencies || {}).length > 0) {
-        const filteredDevDeps = filterDependencies(packageJson.devDependencies, config.ignorePatterns);
-        const devDependencyResults = await scanDependencies(
-          filteredDevDeps,
-          'devDependencies',
-          allowedLicenses,
-          vulnerabilities,
-          config.rules.devDependencies
-        );
-        results = results.concat(devDependencyResults);
-      }
-
-      if (results.length === 0) {
-        console.log(chalk.yellow('\nNo dependencies found to scan!'));
-        return;
-      }
-
-      let treeAnalysis = null;
-      if (options.advanced) {
-        console.log(chalk.yellow('\nPerforming advanced dependency analysis...'));
-        treeAnalysis = await analyzeDependencyTree(options.path);
+      // Apply sorting
+      if (options.sort) {
+        const sortField = options.sort;
+        filteredResults.sort((a, b) => {
+          let comparison;
+          switch (sortField) {
+            case 'name':
+              comparison = a.name.localeCompare(b.name);
+              break;
+            case 'version':
+              comparison = semver.compare(
+                a.currentVersion.replace(/[\^~]/, ''),
+                b.currentVersion.replace(/[\^~]/, '')
+              );
+              break;
+            case 'license':
+              comparison = a.license.localeCompare(b.license);
+              break;
+            case 'severity':
+              const severityOrder = { CRITICAL: 4, HIGH: 3, MODERATE: 2, LOW: 1, NONE: 0 };
+              comparison = (severityOrder[a.vulnLevel] || 0) - (severityOrder[b.vulnLevel] || 0);
+              break;
+            default:
+              comparison = 0;
+          }
+          return options.reverse ? -comparison : comparison;
+        });
       }
 
-      const format = options.format || config.output.defaultFormat;
-      const outputPath = options.output || 
-        (format !== 'console' ? path.join(config.output.reportsDir, `report.${format}`) : null);
-
-      if (outputPath) {
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      }
-
-      if (format === 'console' && !config.output.silent) {
-        displayResults(results);
-        if (treeAnalysis) {
-          displayAdvancedAnalysis(treeAnalysis);
+      if (options.format === 'console' && !config.output.silent) {
+        displayResults(filteredResults);
+        
+        // Show filter summary
+        if (Object.values(filters).some(v => v)) {
+          console.log(chalk.dim('\nActive Filters:'));
+          if (filters.status) console.log(chalk.dim(`Status: ${filters.status.join(', ')}`));
+          if (filters.name) console.log(chalk.dim(`Name: ${filters.name}`));
+          if (filters.license) console.log(chalk.dim(`License: ${filters.license.join(', ')}`));
+          if (filters.severity) console.log(chalk.dim(`Severity: ${filters.severity.join(', ')}`));
+          if (filters.type) console.log(chalk.dim(`Type: ${filters.type}`));
+          console.log(chalk.dim(`\nShowing ${filteredResults.length} of ${results.length} dependencies`));
         }
-      } else if (formatters[format]) {
-        const output = await formatters[format]({ results, treeAnalysis }, outputPath);
-        if (outputPath) {
-          console.log(chalk.green(output));
+      } else if (formatters[options.format]) {
+        const output = await formatters[options.format]({ results: filteredResults }, options.output);
+        if (options.output) {
+          console.log(chalk.green(`Report saved to: ${options.output}`));
         } else {
           console.log(output);
         }
-      } else {
-        console.error(chalk.red(`Unsupported format: ${format}`));
-        process.exit(1);
       }
 
       // Handle exit conditions
-      const hasHighSeverity = results.some(r => ['HIGH', 'CRITICAL'].includes(r.vulnLevel));
-      const hasForbiddenLicense = results.some(r => r.licenseStatus === 'NON-COMPLIANT');
+      const hasHighSeverity = filteredResults.some(r => ['HIGH', 'CRITICAL'].includes(r.vulnLevel));
+      const hasForbiddenLicense = filteredResults.some(r => r.licenseStatus === 'NON-COMPLIANT');
 
       if (config.notifications.exitOnHighSeverity && hasHighSeverity) {
-        console.error(chalk.red('\nHigh severity vulnerabilities found!'));
         process.exit(1);
       }
 
       if (config.notifications.exitOnForbiddenLicense && hasForbiddenLicense) {
-        console.error(chalk.red('\nForbidden licenses found!'));
         process.exit(1);
       }
-      
     } catch (error) {
       console.error(chalk.red(`\nError: ${error.message}`));
       if (config?.output?.debug) {
@@ -827,7 +892,7 @@ function filterDependencies(dependencies, ignorePatterns) {
         new RegExp(pattern.replace(/\*/g, '.*')).test(name)
       )
     )
-  );
+  )
 }
 
 program
@@ -1130,16 +1195,29 @@ Generated on: ${new Date().toISOString()}
   return templates[template] || templates.default;
 }
 
-async function performFullScan(config) {
-  const packageJson = await readPackageJson(config.path || '.');
-  const vulnerabilities = await getVulnerabilities(config.path || '.');
+async function performFullScan(config = {}) {
+  // Ensure config has required properties with defaults
+  const defaultConfig = {
+    path: '.',
+    includeDev: false,
+    allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
+    rules: {
+      dependencies: {},
+      devDependencies: {}
+    }
+  };
+
+  config = { ...defaultConfig, ...config };
+  
+  const packageJson = await readPackageJson(config.path);
+  const vulnerabilities = await getVulnerabilities(config.path);
   let results = [];
 
   if (Object.keys(packageJson.dependencies || {}).length > 0) {
     const dependencyResults = await scanDependencies(
       packageJson.dependencies,
       'dependencies',
-      config.allowedLicenses,
+      Array.isArray(config.allowedLicenses) ? config.allowedLicenses : defaultConfig.allowedLicenses,
       vulnerabilities,
       config.rules.dependencies
     );
@@ -1150,7 +1228,7 @@ async function performFullScan(config) {
     const devDependencyResults = await scanDependencies(
       packageJson.devDependencies,
       'devDependencies',
-      config.allowedLicenses,
+      Array.isArray(config.allowedLicenses) ? config.allowedLicenses : defaultConfig.allowedLicenses,
       vulnerabilities,
       config.rules.devDependencies
     );
@@ -1204,13 +1282,17 @@ async function runCICheck() {
     allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
     output: {
       debug: false
+    },
+    rules: {
+      dependencies: {},
+      devDependencies: {}
     }
   };
   
   let config;
   try {
     const loadedConfig = await loadConfig();
-    config = { ...defaultConfig, ...loadedConfig };
+    config = deepMerge(defaultConfig, loadedConfig || {});
   } catch (error) {
     console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
     config = defaultConfig;
@@ -1241,4 +1323,40 @@ async function runCICheck() {
       config
     };
   }
+}
+
+function filterDependencies(results, filters) {
+  return results.filter(dep => {
+    // Filter by update status
+    if (filters.status && !filters.status.includes(dep.versionStatus)) {
+      return false;
+    }
+    
+    // Filter by package name
+    if (filters.name && !dep.name.includes(filters.name)) {
+      return false;
+    }
+    
+    // Filter by license
+    if (filters.license && !filters.license.includes(dep.license)) {
+      return false;
+    }
+    
+    // Filter by vulnerability level
+    if (filters.severity && !filters.severity.includes(dep.vulnLevel)) {
+      return false;
+    }
+    
+    // Filter by type (dependencies/devDependencies)
+    if (filters.type && filters.type !== dep.type) {
+      return false;
+    }
+    
+    // Custom filter function
+    if (filters.custom && !filters.custom(dep)) {
+      return false;
+    }
+    
+    return true;
+  });
 }
