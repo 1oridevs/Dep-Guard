@@ -417,328 +417,349 @@ function displaySummary(results) {
   console.log('----------------------------------------\n');
 }
 
-const formatters = {
-  async json(results, outputPath) {
-    const output = {
-      timestamp: new Date().toISOString(),
-      summary: generateSummary(results),
-      results: results
-    };
-    
-    if (outputPath) {
-      await fs.writeFile(outputPath, JSON.stringify(output, null, 2));
-      return `JSON report saved to: ${outputPath}`;
-    }
-    return JSON.stringify(output, null, 2);
+const reportTemplates = {
+  default: {
+    name: 'Default Template',
+    format: 'markdown',
+    sections: ['summary', 'dependencies', 'security', 'licenses'],
+    template: `
+# Dependency Guardian Report
+Generated on: {{date}}
+
+## Summary
+{{summary}}
+
+## Dependencies
+{{dependencies}}
+
+## Security Analysis
+{{security}}
+
+## License Compliance
+{{licenses}}
+    `
   },
+  minimal: {
+    name: 'Minimal Report',
+    format: 'markdown',
+    sections: ['summary'],
+    template: `
+# Dependency Report Summary
+Generated on: {{date}}
 
-  async csv(results, outputPath) {
-    const headers = [
-      'Package Name',
-      'Type',
-      'Current Version',
-      'Latest Version',
-      'Suggested Update',
-      'License',
-      'Version Status',
-      'License Status',
-      'Security Level',
-      'Vulnerabilities Count'
-    ].join(',');
-
-    const rows = results.map(r => [
-      r.name,
-      r.type,
-      r.currentVersion,
-      r.latestVersion,
-      r.suggestedUpdate || 'N/A',
-      r.license,
-      r.versionStatus,
-      r.licenseStatus,
-      r.vulnLevel,
-      r.vulnCount
-    ].join(','));
-
-    const csv = [headers, ...rows].join('\n');
-    
-    if (outputPath) {
-      await fs.writeFile(outputPath, csv);
-      return `CSV report saved to: ${outputPath}`;
-    }
-    return csv;
+{{summary}}
+    `
   },
+  detailed: {
+    name: 'Detailed Report',
+    format: 'markdown',
+    sections: ['summary', 'dependencies', 'security', 'licenses', 'updates', 'trends'],
+    template: `
+# Detailed Dependency Analysis
+Generated on: {{date}}
 
-  async html(results, outputPath) {
-    const template = `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Dependency Guardian Report</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    .header { background: #f0f0f0; padding: 20px; border-radius: 5px; }
-    .summary { margin: 20px 0; }
-    .dependencies { border-collapse: collapse; width: 100%; }
-    .dependencies th, .dependencies td { 
-      border: 1px solid #ddd; 
-      padding: 8px; 
-      text-align: left; 
-    }
-    .dependencies th { background: #f0f0f0; }
-    .up-to-date { color: green; }
-    .major { color: red; }
-    .minor { color: orange; }
-    .patch { color: blue; }
-    .error { color: red; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>Dependency Guardian Report</h1>
-    <p>Generated on: ${new Date().toLocaleString()}</p>
-  </div>
-  
-  <div class="summary">
-    <h2>Summary</h2>
-    <pre>${JSON.stringify(generateSummary(results), null, 2)}</pre>
-  </div>
+## Executive Summary
+{{summary}}
 
-  <h2>Dependencies</h2>
-  <table class="dependencies">
-    <thead>
-      <tr>
-        <th>Package</th>
-        <th>Type</th>
-        <th>Current</th>
-        <th>Latest</th>
-        <th>Suggested</th>
-        <th>License</th>
-        <th>Version Status</th>
-        <th>License Status</th>
-        <th>Security</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${results.map(r => `
-        <tr>
-          <td>${r.name}</td>
-          <td>${r.type}</td>
-          <td>${r.currentVersion}</td>
-          <td>${r.latestVersion}</td>
-          <td>${r.suggestedUpdate || 'N/A'}</td>
-          <td>${r.license}</td>
-          <td class="${r.versionStatus.toLowerCase()}">${r.versionStatus}</td>
-          <td>${r.licenseStatus}</td>
-          <td>${r.vulnLevel} (${r.vulnCount})</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-</body>
-</html>`;
-    
-    if (outputPath) {
-      await fs.writeFile(outputPath, template);
-      return `HTML report saved to: ${outputPath}`;
-    }
-    return template;
-  },
+## Dependencies Overview
+{{dependencies}}
 
-  async analysis(results, outputPath) {
-    const analysisResults = {
-      timestamp: new Date().toISOString(),
-      dependencyAnalysis: results.treeAnalysis,
-      packageAnalysis: results.results,
-      summary: {
-        totalPackages: results.results.length,
-        uniqueDependencies: results.treeAnalysis.totalDependencies,
-        maxDepth: results.treeAnalysis.depth,
-        circularDependencies: results.treeAnalysis.circular.length,
-        duplicateDependencies: Array.from(results.treeAnalysis.duplicates.keys()).length
-      }
-    };
+## Security Analysis
+{{security}}
 
-    if (outputPath) {
-      await fs.writeFile(outputPath, JSON.stringify(analysisResults, null, 2));
-      return `Analysis report saved to: ${outputPath}`;
-    }
-    return JSON.stringify(analysisResults, null, 2);
+## License Compliance
+{{licenses}}
+
+## Available Updates
+{{updates}}
+
+## Historical Trends
+{{trends}}
+    `
   }
 };
 
-function generateSummary(results) {
-  return results.reduce((acc, { versionStatus, licenseStatus, vulnLevel }) => {
-    if (['major', 'minor', 'patch'].includes(versionStatus)) {
-      acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
-    } else {
-      acc.versions[versionStatus] = (acc.versions[versionStatus] || 0) + 1;
-    }
-    acc.licenses[licenseStatus] = (acc.licenses[licenseStatus] || 0) + 1;
-    acc.vulnerabilities[vulnLevel] = (acc.vulnerabilities[vulnLevel] || 0) + 1;
-    return acc;
-  }, { 
-    versions: {}, 
-    licenses: {}, 
-    vulnerabilities: {},
-    totalPackages: results.length
-  });
-}
-
-const defaultConfig = {
-  allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
-  ignorePatterns: ['**/node_modules/**', '**/dist/**'],
-  rules: {
-    dependencies: {
-      maxAge: '6 months',
-      forbiddenLicenses: ['GPL'],
-      requireLicense: true
-    },
-    devDependencies: {
-      maxAge: '1 year',
-      forbiddenLicenses: [],
-      requireLicense: false
-    }
-  },
-  output: {
-    defaultFormat: 'console',
-    reportsDir: './reports',
-    silent: false,
-    debug: false
-  },
-  notifications: {
-    exitOnHighSeverity: true,
-    exitOnForbiddenLicense: true
+class ReportManager {
+  constructor() {
+    this.historyFile = '.depguard/history.json';
+    this.ensureHistoryFile();
   }
-};
 
-async function loadConfig(configPath) {
-  try {
-    const explorer = cosmiconfig('depguard');
-    const result = configPath 
-      ? await explorer.load(configPath)
-      : await explorer.search();
-    
-    return result ? { ...defaultConfig, ...result.config } : defaultConfig;
-  } catch (error) {
-    console.warn(chalk.yellow(`Warning: Could not load config file. Using defaults. (${error.message})`));
-    return defaultConfig;
-  }
-}
-
-async function analyzeDependencyTree(projectPath) {
-  try {
-    const tree = dependencyTree({
-      filename: path.join(projectPath, 'package.json'),
-      directory: projectPath,
-      filter: path => path.indexOf('node_modules') === -1
-    });
-    
-    const madgeInstance = await madge(projectPath, {
-      baseDir: projectPath,
-      excludeRegExp: [/node_modules/]
-    });
-
-    const circularDeps = madgeInstance.circular();
-    const duplicates = findDuplicateDependencies(tree);
-    
-    return {
-      tree,
-      circular: circularDeps,
-      duplicates,
-      depth: calculateTreeDepth(tree),
-      totalDependencies: countDependencies(tree)
-    };
-  } catch (error) {
-    console.error(chalk.red('Error analyzing dependency tree:', error.message));
-    return null;
-  }
-}
-
-function findDuplicateDependencies(tree) {
-  const versions = new Map();
-  const duplicates = new Map();
-
-  function traverse(node, path = []) {
-    Object.entries(node).forEach(([name, subTree]) => {
-      const currentPath = [...path, name];
-      if (!versions.has(name)) {
-        versions.set(name, new Set());
+  async ensureHistoryFile() {
+    try {
+      await fs.mkdir(path.dirname(this.historyFile), { recursive: true });
+      if (!fsSync.existsSync(this.historyFile)) {
+        await fs.writeFile(this.historyFile, JSON.stringify({ scans: [] }));
       }
-      versions.get(name).add(currentPath.join(' → '));
-      
-      if (typeof subTree === 'object') {
-        traverse(subTree, currentPath);
-      }
-    });
-  }
-
-  traverse(tree);
-
-  versions.forEach((paths, name) => {
-    if (paths.size > 1) {
-      duplicates.set(name, Array.from(paths));
+    } catch (error) {
+      console.error('Error creating history file:', error);
     }
-  });
-
-  return duplicates;
-}
-
-function calculateTreeDepth(tree) {
-  function getDepth(node) {
-    if (typeof node !== 'object' || Object.keys(node).length === 0) {
-      return 0;
-    }
-    return 1 + Math.max(...Object.values(node).map(getDepth));
-  }
-  return getDepth(tree);
-}
-
-function countDependencies(tree) {
-  const unique = new Set();
-  
-  function traverse(node) {
-    Object.keys(node).forEach(dep => {
-      unique.add(dep);
-      if (typeof node[dep] === 'object') {
-        traverse(node[dep]);
-      }
-    });
-  }
-  
-  traverse(tree);
-  return unique.size;
-}
-
-function displayAdvancedAnalysis(treeAnalysis) {
-  console.log(chalk.bold('\nAdvanced Dependency Analysis:'));
-  console.log('----------------------------------------');
-  
-  console.log(chalk.bold('\nDependency Tree Statistics:'));
-  console.log(`📦 Total Unique Dependencies: ${chalk.blue(treeAnalysis.totalDependencies)}`);
-  console.log(`📏 Maximum Tree Depth: ${chalk.blue(treeAnalysis.depth)}`);
-  
-  if (treeAnalysis.circular.length > 0) {
-    console.log(chalk.bold('\n⚠️  Circular Dependencies Detected:'));
-    treeAnalysis.circular.forEach((circle, index) => {
-      console.log(chalk.yellow(`${index + 1}. ${circle.join(' → ')}`));
-    });
-  } else {
-    console.log(chalk.green('\n✅ No circular dependencies detected'));
   }
 
-  if (treeAnalysis.duplicates.size > 0) {
-    console.log(chalk.bold('\n⚠️  Duplicate Dependencies Detected:'));
-    treeAnalysis.duplicates.forEach((paths, name) => {
-      console.log(chalk.yellow(`\n${name} appears in multiple paths:`));
-      paths.forEach((path, index) => {
-        console.log(chalk.dim(`  ${index + 1}. ${path}`));
+  async saveScanResults(results) {
+    try {
+      const history = JSON.parse(await fs.readFile(this.historyFile, 'utf8'));
+      history.scans.push({
+        timestamp: new Date().toISOString(),
+        results: results
       });
-    });
-  } else {
-    console.log(chalk.green('\n✅ No duplicate dependencies detected'));
+      await fs.writeFile(this.historyFile, JSON.stringify(history, null, 2));
+    } catch (error) {
+      console.error('Error saving scan results:', error);
+    }
   }
-  
-  console.log('\n----------------------------------------');
+
+  async generateReport(results, template = 'default', compareWith = null) {
+    const reportTemplate = reportTemplates[template] || reportTemplates.default;
+    let report = reportTemplate.template;
+
+    // Replace template variables
+    report = report.replace('{{date}}', new Date().toLocaleString());
+    
+    // Generate sections
+    for (const section of reportTemplate.sections) {
+      const content = await this.generateSection(section, results, compareWith);
+      report = report.replace(`{{${section}}}`, content);
+    }
+
+    return report;
+  }
+
+  async generateSection(section, results, compareWith) {
+    switch (section) {
+      case 'summary':
+        return this.generateSummarySection(results, compareWith);
+      case 'dependencies':
+        return this.generateDependenciesSection(results);
+      case 'security':
+        return this.generateSecuritySection(results);
+      case 'licenses':
+        return this.generateLicensesSection(results);
+      case 'updates':
+        return this.generateUpdatesSection(results);
+      case 'trends':
+        return this.generateTrendsSection(results);
+      default:
+        return '';
+    }
+  }
+
+  async generateSummarySection(results, compareWith) {
+    let summary = '### Overview\n';
+    summary += `- Total packages: ${results.length}\n`;
+    
+    const stats = this.calculateStats(results);
+    summary += `- Up-to-date packages: ${stats.upToDate}\n`;
+    summary += `- Outdated packages: ${stats.outdated}\n`;
+    summary += `- Security issues: ${stats.securityIssues}\n`;
+    summary += `- License issues: ${stats.licenseIssues}\n`;
+
+    if (compareWith) {
+      summary += '\n### Changes Since Last Scan\n';
+      const changes = this.compareResults(results, compareWith);
+      summary += `- New packages: ${changes.added.length}\n`;
+      summary += `- Removed packages: ${changes.removed.length}\n`;
+      summary += `- Updated packages: ${changes.updated.length}\n`;
+    }
+
+    return summary;
+  }
+
+  calculateStats(results) {
+    return results.reduce((stats, dep) => ({
+      upToDate: stats.upToDate + (dep.versionStatus === 'UP-TO-DATE' ? 1 : 0),
+      outdated: stats.outdated + (dep.versionStatus !== 'UP-TO-DATE' ? 1 : 0),
+      securityIssues: stats.securityIssues + (dep.vulnCount > 0 ? 1 : 0),
+      licenseIssues: stats.licenseIssues + (dep.licenseStatus === 'NON-COMPLIANT' ? 1 : 0)
+    }), { upToDate: 0, outdated: 0, securityIssues: 0, licenseIssues: 0 });
+  }
+
+  compareResults(current, previous) {
+    const currentPackages = new Set(current.map(r => r.name));
+    const previousPackages = new Set(previous.map(r => r.name));
+
+    return {
+      added: [...currentPackages].filter(p => !previousPackages.has(p)),
+      removed: [...previousPackages].filter(p => !currentPackages.has(p)),
+      updated: current.filter(c => {
+        const prev = previous.find(p => p.name === c.name);
+        return prev && prev.currentVersion !== c.currentVersion;
+      })
+    };
+  }
+
+  async generateTrendsSection(results) {
+    try {
+      const history = JSON.parse(await fs.readFile(this.historyFile, 'utf8'));
+      const trends = this.analyzeTrends(history.scans);
+      
+      let section = '### Historical Trends\n\n';
+      section += '#### Dependency Count\n';
+      section += `- Current: ${results.length}\n`;
+      section += `- Average: ${trends.averageDepCount.toFixed(1)}\n`;
+      section += `- Trend: ${trends.depCountTrend}\n\n`;
+
+      section += '#### Security Issues\n';
+      section += `- Current: ${trends.currentSecurityIssues}\n`;
+      section += `- Trend: ${trends.securityTrend}\n\n`;
+
+      section += '#### License Compliance\n';
+      section += `- Current compliance rate: ${trends.currentLicenseCompliance}%\n`;
+      section += `- Trend: ${trends.licenseTrend}\n`;
+
+      return section;
+    } catch (error) {
+      return '### Historical Trends\nNo historical data available.';
+    }
+  }
+
+  analyzeTrends(scans) {
+    if (scans.length < 2) return null;
+
+    const depCounts = scans.map(s => s.results.length);
+    const securityIssues = scans.map(s => 
+      s.results.reduce((sum, r) => sum + r.vulnCount, 0)
+    );
+    const licenseCompliance = scans.map(s =>
+      (s.results.filter(r => r.licenseStatus === 'COMPLIANT').length / s.results.length) * 100
+    );
+
+    return {
+      averageDepCount: depCounts.reduce((a, b) => a + b) / depCounts.length,
+      depCountTrend: this.calculateTrend(depCounts),
+      currentSecurityIssues: securityIssues[securityIssues.length - 1],
+      securityTrend: this.calculateTrend(securityIssues),
+      currentLicenseCompliance: licenseCompliance[licenseCompliance.length - 1].toFixed(1),
+      licenseTrend: this.calculateTrend(licenseCompliance)
+    };
+  }
+
+  calculateTrend(values) {
+    if (values.length < 2) return 'Not enough data';
+    const last = values[values.length - 1];
+    const prev = values[values.length - 2];
+    const diff = ((last - prev) / prev) * 100;
+    
+    if (Math.abs(diff) < 1) return 'Stable';
+    return `${diff > 0 ? 'Increased' : 'Decreased'} by ${Math.abs(diff).toFixed(1)}%`;
+  }
+
+  async generateDependenciesSection(results) {
+    let section = '### Dependencies Overview\n\n';
+    
+    // Group by type
+    const deps = results.filter(r => r.type === 'dependencies');
+    const devDeps = results.filter(r => r.type === 'devDependencies');
+    
+    section += '#### Production Dependencies\n';
+    section += this.formatDependencyList(deps);
+    
+    section += '\n#### Development Dependencies\n';
+    section += this.formatDependencyList(devDeps);
+    
+    return section;
+  }
+
+  async generateSecuritySection(results) {
+    let section = '### Security Analysis\n\n';
+    
+    const vulnerabilities = results.filter(r => r.vulnCount > 0)
+      .sort((a, b) => b.vulnCount - a.vulnCount);
+    
+    if (vulnerabilities.length === 0) {
+      section += '✅ No security vulnerabilities found\n';
+    } else {
+      section += `⚠️ Found ${vulnerabilities.length} packages with vulnerabilities:\n\n`;
+      vulnerabilities.forEach(pkg => {
+        section += `- ${pkg.name} (${pkg.vulnCount} ${pkg.vulnLevel} vulnerabilities)\n`;
+      });
+    }
+    
+    return section;
+  }
+
+  async generateLicensesSection(results) {
+    let section = '### License Compliance\n\n';
+    
+    const nonCompliant = results.filter(r => r.licenseStatus === 'NON-COMPLIANT');
+    const unknown = results.filter(r => r.licenseStatus === 'UNKNOWN');
+    
+    if (nonCompliant.length === 0 && unknown.length === 0) {
+      section += '✅ All licenses are compliant\n';
+    } else {
+      if (nonCompliant.length > 0) {
+        section += `⚠️ Found ${nonCompliant.length} non-compliant licenses:\n\n`;
+        nonCompliant.forEach(pkg => {
+          section += `- ${pkg.name} (${pkg.license})\n`;
+        });
+      }
+      
+      if (unknown.length > 0) {
+        section += `\n⚠️ Found ${unknown.length} packages with unknown licenses:\n\n`;
+        unknown.forEach(pkg => {
+          section += `- ${pkg.name}\n`;
+        });
+      }
+    }
+    
+    return section;
+  }
+
+  async generateUpdatesSection(results) {
+    let section = '### Available Updates\n\n';
+    
+    const updates = results.filter(r => r.versionStatus !== 'UP-TO-DATE')
+      .sort((a, b) => {
+        const order = { major: 3, minor: 2, patch: 1 };
+        return order[b.versionStatus] - order[a.versionStatus];
+      });
+    
+    if (updates.length === 0) {
+      section += '✅ All packages are up to date\n';
+    } else {
+      section += `Found ${updates.length} packages with available updates:\n\n`;
+      
+      const byType = {
+        major: updates.filter(r => r.versionStatus === 'major'),
+        minor: updates.filter(r => r.versionStatus === 'minor'),
+        patch: updates.filter(r => r.versionStatus === 'patch')
+      };
+      
+      if (byType.major.length > 0) {
+        section += '#### Major Updates (Breaking Changes)\n';
+        byType.major.forEach(pkg => {
+          section += `- ${pkg.name}: ${pkg.currentVersion} → ${pkg.latestVersion}\n`;
+        });
+      }
+      
+      if (byType.minor.length > 0) {
+        section += '\n#### Minor Updates (New Features)\n';
+        byType.minor.forEach(pkg => {
+          section += `- ${pkg.name}: ${pkg.currentVersion} → ${pkg.latestVersion}\n`;
+        });
+      }
+      
+      if (byType.patch.length > 0) {
+        section += '\n#### Patch Updates (Bug Fixes)\n';
+        byType.patch.forEach(pkg => {
+          section += `- ${pkg.name}: ${pkg.currentVersion} → ${pkg.latestVersion}\n`;
+        });
+      }
+    }
+    
+    return section;
+  }
+
+  formatDependencyList(deps) {
+    if (deps.length === 0) return 'No dependencies found\n';
+    
+    return deps.map(dep => 
+      `- ${dep.name} (${dep.currentVersion})\n  ` +
+      `Status: ${dep.versionStatus}, ` +
+      `License: ${dep.license}, ` +
+      `Security: ${dep.vulnCount > 0 ? `${dep.vulnCount} ${dep.vulnLevel}` : 'Clean'}`
+    ).join('\n');
+  }
 }
 
 program
@@ -1044,6 +1065,45 @@ program
       await showPackageDetails(selectedDep);
     } catch (error) {
       console.error(chalk.red(`\nError: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('report')
+  .description('Generate dependency reports')
+  .option('-t, --template <name>', 'Report template to use', 'default')
+  .option('-o, --output <file>', 'Output file path')
+  .option('-c, --compare', 'Compare with previous scan')
+  .option('-f, --format <format>', 'Output format (markdown, html, pdf)', 'markdown')
+  .option('--history', 'Show historical trends')
+  .action(async (options) => {
+    try {
+      const reportManager = new ReportManager();
+      const results = await performFullScan();
+      
+      // Save scan results for historical tracking
+      await reportManager.saveScanResults(results);
+
+      let compareWith = null;
+      if (options.compare) {
+        const history = JSON.parse(await fs.readFile(reportManager.historyFile, 'utf8'));
+        if (history.scans.length > 1) {
+          compareWith = history.scans[history.scans.length - 2].results;
+        }
+      }
+
+      const report = await reportManager.generateReport(results, options.template, compareWith);
+
+      if (options.output) {
+        await fs.writeFile(options.output, report);
+        console.log(chalk.green(`Report saved to: ${options.output}`));
+      } else {
+        console.log(report);
+      }
+
+    } catch (error) {
+      console.error(chalk.red(`Error generating report: ${error.message}`));
       process.exit(1);
     }
   });

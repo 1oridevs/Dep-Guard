@@ -1,0 +1,350 @@
+{
+  "scans": [
+    {
+      "timestamp": "2025-03-11T13:41:14.768Z",
+      "results": [
+        {
+          "name": "axios",
+          "type": "dependencies",
+          "currentVersion": "^1.6.0",
+          "latestVersion": "1.8.2",
+          "suggestedUpdate": "1.6.8",
+          "license": "MIT",
+          "versionStatus": "minor",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "chalk",
+          "type": "dependencies",
+          "currentVersion": "^4.1.2",
+          "latestVersion": "5.4.1",
+          "suggestedUpdate": "5.4.1",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "cli-progress",
+          "type": "dependencies",
+          "currentVersion": "^3.12.0",
+          "latestVersion": "3.12.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "commander",
+          "type": "dependencies",
+          "currentVersion": "^11.0.0",
+          "latestVersion": "13.1.0",
+          "suggestedUpdate": "11.1.0",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "cosmiconfig",
+          "type": "dependencies",
+          "currentVersion": "^9.0.0",
+          "latestVersion": "9.0.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "dependency-tree",
+          "type": "dependencies",
+          "currentVersion": "^11.1.1",
+          "latestVersion": "11.1.1",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "glob",
+          "type": "dependencies",
+          "currentVersion": "^11.0.1",
+          "latestVersion": "11.0.1",
+          "suggestedUpdate": null,
+          "license": "ISC",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "inquirer",
+          "type": "dependencies",
+          "currentVersion": "^8.2.6",
+          "latestVersion": "12.4.3",
+          "suggestedUpdate": "12.4.3",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "js-yaml",
+          "type": "dependencies",
+          "currentVersion": "^4.1.0",
+          "latestVersion": "4.1.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "madge",
+          "type": "dependencies",
+          "currentVersion": "^8.0.0",
+          "latestVersion": "8.0.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "node-cache",
+          "type": "dependencies",
+          "currentVersion": "^5.1.2",
+          "latestVersion": "5.1.2",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "ora",
+          "type": "dependencies",
+          "currentVersion": "^5.4.1",
+          "latestVersion": "8.2.0",
+          "suggestedUpdate": "8.2.0",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "p-limit",
+          "type": "dependencies",
+          "currentVersion": "^3.1.0",
+          "latestVersion": "6.2.0",
+          "suggestedUpdate": "6.2.0",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "semver",
+          "type": "dependencies",
+          "currentVersion": "^7.7.1",
+          "latestVersion": "7.7.1",
+          "suggestedUpdate": null,
+          "license": "ISC",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        }
+      ]
+    },
+    {
+      "timestamp": "2025-03-11T13:42:00.725Z",
+      "results": [
+        {
+          "name": "axios",
+          "type": "dependencies",
+          "currentVersion": "^1.6.0",
+          "latestVersion": "1.8.2",
+          "suggestedUpdate": "1.6.8",
+          "license": "MIT",
+          "versionStatus": "minor",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "chalk",
+          "type": "dependencies",
+          "currentVersion": "^4.1.2",
+          "latestVersion": "5.4.1",
+          "suggestedUpdate": "5.4.1",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "cli-progress",
+          "type": "dependencies",
+          "currentVersion": "^3.12.0",
+          "latestVersion": "3.12.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "commander",
+          "type": "dependencies",
+          "currentVersion": "^11.0.0",
+          "latestVersion": "13.1.0",
+          "suggestedUpdate": "11.1.0",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "cosmiconfig",
+          "type": "dependencies",
+          "currentVersion": "^9.0.0",
+          "latestVersion": "9.0.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "dependency-tree",
+          "type": "dependencies",
+          "currentVersion": "^11.1.1",
+          "latestVersion": "11.1.1",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "glob",
+          "type": "dependencies",
+          "currentVersion": "^11.0.1",
+          "latestVersion": "11.0.1",
+          "suggestedUpdate": null,
+          "license": "ISC",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "inquirer",
+          "type": "dependencies",
+          "currentVersion": "^8.2.6",
+          "latestVersion": "12.4.3",
+          "suggestedUpdate": "12.4.3",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "js-yaml",
+          "type": "dependencies",
+          "currentVersion": "^4.1.0",
+          "latestVersion": "4.1.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "madge",
+          "type": "dependencies",
+          "currentVersion": "^8.0.0",
+          "latestVersion": "8.0.0",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "node-cache",
+          "type": "dependencies",
+          "currentVersion": "^5.1.2",
+          "latestVersion": "5.1.2",
+          "suggestedUpdate": null,
+          "license": "MIT",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "ora",
+          "type": "dependencies",
+          "currentVersion": "^5.4.1",
+          "latestVersion": "8.2.0",
+          "suggestedUpdate": "8.2.0",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "p-limit",
+          "type": "dependencies",
+          "currentVersion": "^3.1.0",
+          "latestVersion": "6.2.0",
+          "suggestedUpdate": "6.2.0",
+          "license": "MIT",
+          "versionStatus": "major",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        },
+        {
+          "name": "semver",
+          "type": "dependencies",
+          "currentVersion": "^7.7.1",
+          "latestVersion": "7.7.1",
+          "suggestedUpdate": null,
+          "license": "ISC",
+          "versionStatus": "UP-TO-DATE",
+          "licenseStatus": "COMPLIANT",
+          "vulnLevel": "NONE",
+          "vulnCount": 0
+        }
+      ]
+    }
+  ]
+}
