@@ -756,6 +756,12 @@ program
   .option('--dev-deps-only', 'Show only devDependencies')
   .option('--sort <field>', 'Sort by field (name, version, license, severity)', 'name')
   .option('--reverse', 'Reverse sort order')
+  .option('--max-size <bytes>', 'Filter by maximum package size in bytes')
+  .option('--max-gzip <bytes>', 'Filter by maximum gzipped size in bytes')
+  .option('--min-downloads <count>', 'Filter by minimum monthly downloads')
+  .option('--last-update <days>', 'Filter by last update (in days)')
+  .option('--max-depth <number>', 'Filter by maximum dependency depth')
+  .option('--pattern <regex>', 'Filter by regex pattern')
   .action(async (options) => {
     try {
       const defaultConfig = {
@@ -778,10 +784,16 @@ program
         license: options.filterLicense?.split(','),
         severity: options.filterSeverity?.split(','),
         type: options.depsOnly ? 'dependencies' : 
-              options.devDepsOnly ? 'devDependencies' : null
+              options.devDepsOnly ? 'devDependencies' : null,
+        maxSize: options.maxSize ? parseInt(options.maxSize) : undefined,
+        maxGzip: options.maxGzip ? parseInt(options.maxGzip) : undefined,
+        minDownloads: options.minDownloads ? parseInt(options.minDownloads) : undefined,
+        lastUpdate: options.lastUpdate ? parseInt(options.lastUpdate) : undefined,
+        depth: options.maxDepth ? parseInt(options.maxDepth) : undefined,
+        pattern: options.pattern
       };
 
-      let filteredResults = filterDependencies(results, filters);
+      let filteredResults = await filterDependencies(results, filters);
 
       // Apply sorting
       if (options.sort) {
@@ -1312,15 +1324,18 @@ async function runCICheck() {
 }
 
 function filterDependencies(results, filters) {
-  return results.filter(dep => {
+  return results.filter(async (dep) => {
     // Filter by update status
     if (filters.status && !filters.status.includes(dep.versionStatus)) {
       return false;
     }
     
     // Filter by package name
-    if (filters.name && !dep.name.includes(filters.name)) {
-      return false;
+    if (filters.name) {
+      const regex = new RegExp(filters.name.replace(/\*/g, '.*'));
+      if (!regex.test(dep.name)) {
+        return false;
+      }
     }
     
     // Filter by license
@@ -1337,12 +1352,40 @@ function filterDependencies(results, filters) {
     if (filters.type && filters.type !== dep.type) {
       return false;
     }
-    
-    // Custom filter function
-    if (filters.custom && !filters.custom(dep)) {
+
+    // New filters
+    if (filters.maxSize || filters.maxGzip) {
+      const sizeInfo = await getPackageSize(dep.name, dep.currentVersion);
+      if (sizeInfo) {
+        if (filters.maxSize && sizeInfo.size > filters.maxSize) {
+          return false;
+        }
+        if (filters.maxGzip && sizeInfo.gzip > filters.maxGzip) {
+          return false;
+        }
+      }
+    }
+
+    if (filters.minDownloads) {
+      const stats = await getPackageStats(dep.name);
+      if (stats && stats.downloads < filters.minDownloads) {
+        return false;
+      }
+    }
+
+    if (filters.lastUpdate) {
+      const lastUpdateDate = new Date(dep.lastUpdate);
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - filters.lastUpdate);
+      if (lastUpdateDate < cutoffDate) {
+        return false;
+      }
+    }
+
+    if (filters.depth !== undefined && dep.depth > filters.depth) {
       return false;
     }
-    
+
     return true;
   });
 }
@@ -1683,5 +1726,32 @@ async function displayLicenseViewer(dep) {
         process.stdin.once('data', resolve);
       });
     }
+  }
+}
+
+// Add these helper functions for advanced filtering
+async function getPackageSize(packageName, version) {
+  try {
+    const response = await axios.get(`https://bundlephobia.com/api/size?package=${packageName}@${version}`);
+    return {
+      size: response.data.size,
+      gzip: response.data.gzip,
+      dependencyCount: response.data.dependencyCount
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function getPackageStats(packageName) {
+  try {
+    const response = await axios.get(`https://api.npmjs.org/downloads/point/last-month/${packageName}`);
+    return {
+      downloads: response.data.downloads,
+      start: response.data.start,
+      end: response.data.end
+    };
+  } catch (error) {
+    return null;
   }
 }
