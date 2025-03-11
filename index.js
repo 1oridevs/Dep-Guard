@@ -1862,7 +1862,7 @@ program
       await interactive.start();
     } catch (error) {
       console.error(chalk.red('Error in interactive mode:', error.message));
-      process.exit(1);
+  process.exit(1);
     }
   });
 
