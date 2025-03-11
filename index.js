@@ -748,9 +748,6 @@ program
   .option('-i, --include-dev', 'include devDependencies')
   .option('-f, --format <format>', 'output format (console, json, csv)', 'console')
   .option('-o, --output <file>', 'output file path')
-  .option('-a, --advanced', 'perform advanced dependency analysis', false)
-  .option('-P, --policy <name>', 'policy to use for scanning')
-  .option('--ci', 'Run in CI mode (stricter checks, exit codes)', false)
   .option('--filter-status <status>', 'Filter by update status (comma-separated: UP-TO-DATE,major,minor,patch)')
   .option('--filter-name <pattern>', 'Filter by package name pattern')
   .option('--filter-license <licenses>', 'Filter by license (comma-separated)')
@@ -760,7 +757,6 @@ program
   .option('--sort <field>', 'Sort by field (name, version, license, severity)', 'name')
   .option('--reverse', 'Reverse sort order')
   .action(async (options) => {
-    let config;
     try {
       const defaultConfig = {
         path: options.path || '.',
@@ -770,36 +766,10 @@ program
           format: options.format || 'console',
           silent: false,
           debug: false
-        },
-        rules: {
-          dependencies: {},
-          devDependencies: {}
-        },
-        notifications: {
-          exitOnHighSeverity: false,
-          exitOnForbiddenLicense: false
         }
       };
 
-      try {
-        const explorer = cosmiconfig('depguard');
-        const result = await explorer.search();
-        config = result ? {
-          ...deepMerge(defaultConfig, result.config),
-          allowedLicenses: result.config.allowedLicenses || defaultConfig.allowedLicenses
-        } : defaultConfig;
-      } catch (error) {
-        console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
-        config = defaultConfig;
-      }
-
-      if (!config.output.silent) {
-        displayWelcome();
-        console.log(chalk.yellow('Scanning dependencies...'));
-        console.log(chalk.dim(`Project path: ${config.path}`));
-      }
-
-      const results = await performFullScan(config);
+      const results = await performFullScan(defaultConfig);
 
       // Apply filters
       const filters = {
@@ -849,11 +819,13 @@ program
           summary: {
             total: results.length,
             filtered: filteredResults.length,
-            filters: filters
+            filters: filters,
+            vulnerabilities: {},
+            licenses: {}
           }
         };
         console.log(JSON.stringify(output, null, 2));
-      } else if (options.format === 'console' && !config.output.silent) {
+      } else if (options.format === 'console') {
         displayResults(filteredResults);
         
         // Show filter summary
@@ -867,37 +839,11 @@ program
           console.log(chalk.dim(`\nShowing ${filteredResults.length} of ${results.length} dependencies`));
         }
       }
-
-      // Handle exit conditions
-      const hasHighSeverity = filteredResults.some(r => ['HIGH', 'CRITICAL'].includes(r.vulnLevel));
-      const hasForbiddenLicense = filteredResults.some(r => r.licenseStatus === 'NON-COMPLIANT');
-
-      if (config.notifications.exitOnHighSeverity && hasHighSeverity) {
-        process.exit(1);
-      }
-
-      if (config.notifications.exitOnForbiddenLicense && hasForbiddenLicense) {
-        process.exit(1);
-      }
     } catch (error) {
       console.error(chalk.red(`\nError: ${error.message}`));
-      if (config?.output?.debug) {
-        console.error(error.stack);
-      }
       process.exit(1);
     }
   });
-
-function filterDependencies(dependencies, ignorePatterns) {
-  if (!ignorePatterns || ignorePatterns.length === 0) return dependencies;
-  
-  return Object.fromEntries(
-    Object.entries(dependencies).filter(([name]) => 
-      !ignorePatterns.some(pattern => 
-        new RegExp(pattern.replace(/\*/g, '.*')).test(name)
-      )
-    )
-}
 
 program
   .command('policy')
