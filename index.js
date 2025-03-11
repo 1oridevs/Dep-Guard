@@ -1392,6 +1392,7 @@ async function showPackageDetails(dep) {
         { name: 'View Changelog', value: 'changelog' },
         { name: 'View Dependencies', value: 'dependencies' },
         { name: 'View Dependency Graph', value: 'graph' },
+        { name: 'View License Details', value: 'license' },
         { name: 'Back to List', value: 'back' },
         { name: 'Exit', value: 'exit' }
       ]
@@ -1411,6 +1412,9 @@ async function showPackageDetails(dep) {
       break;
     case 'graph':
       await displayDependencyGraph(dep);
+      break;
+    case 'license':
+      await displayLicenseViewer(dep);
       break;
     case 'exit':
       process.exit(0);
@@ -1590,4 +1594,94 @@ async function displayDependencyGraph(dep) {
       resolve();
     });
   });
+}
+
+// Add these helper functions after the existing ones
+async function getLicenseDetails(licenseName) {
+  try {
+    const response = await axios.get(`https://api.github.com/licenses/${licenseName.toLowerCase()}`);
+    return {
+      name: response.data.name,
+      description: response.data.description,
+      permissions: response.data.permissions,
+      conditions: response.data.conditions,
+      limitations: response.data.limitations,
+      body: response.data.body
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function displayLicenseViewer(dep) {
+  console.clear();
+  console.log(chalk.bold(`\nLicense Information for ${dep.name}\n`));
+  
+  const licenseDetails = await getLicenseDetails(dep.license);
+  
+  if (!licenseDetails) {
+    console.log(chalk.yellow(`Unable to fetch details for ${dep.license} license`));
+    console.log(chalk.dim('\nBasic Information:'));
+    console.log(`License: ${dep.license}`);
+    console.log(`Status: ${getLicenseColor(dep.licenseStatus)(dep.licenseStatus)}`);
+  } else {
+    // Display license overview
+    console.log(chalk.dim('License Overview:'));
+    console.log(`Name: ${chalk.blue(licenseDetails.name)}`);
+    console.log(`Status: ${getLicenseColor(dep.licenseStatus)(dep.licenseStatus)}`);
+    
+    if (licenseDetails.description) {
+      console.log(chalk.dim('\nDescription:'));
+      console.log(licenseDetails.description);
+    }
+
+    // Display permissions
+    if (licenseDetails.permissions?.length > 0) {
+      console.log(chalk.dim('\nPermissions:'));
+      licenseDetails.permissions.forEach(permission => {
+        console.log(chalk.green(`✓ ${permission}`));
+      });
+    }
+
+    // Display conditions
+    if (licenseDetails.conditions?.length > 0) {
+      console.log(chalk.dim('\nConditions:'));
+      licenseDetails.conditions.forEach(condition => {
+        console.log(chalk.yellow(`! ${condition}`));
+      });
+    }
+
+    // Display limitations
+    if (licenseDetails.limitations?.length > 0) {
+      console.log(chalk.dim('\nLimitations:'));
+      licenseDetails.limitations.forEach(limitation => {
+        console.log(chalk.red(`× ${limitation}`));
+      });
+    }
+
+    // Show license text option
+    const { action } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          { name: 'View Full License Text', value: 'view-text' },
+          { name: 'Back', value: 'back' }
+        ]
+      }
+    ]);
+
+    if (action === 'view-text') {
+      console.clear();
+      console.log(chalk.bold(`\nFull License Text for ${dep.license}\n`));
+      console.log(licenseDetails.body);
+      
+      // Wait for user input before returning
+      await new Promise(resolve => {
+        console.log(chalk.dim('\nPress any key to go back...'));
+        process.stdin.once('data', resolve);
+      });
+    }
+  }
 }
