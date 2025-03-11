@@ -842,7 +842,18 @@ program
         });
       }
 
-      if (options.format === 'console' && !config.output.silent) {
+      // Handle output format
+      if (options.format === 'json') {
+        const output = {
+          results: filteredResults,
+          summary: {
+            total: results.length,
+            filtered: filteredResults.length,
+            filters: filters
+          }
+        };
+        console.log(JSON.stringify(output, null, 2));
+      } else if (options.format === 'console' && !config.output.silent) {
         displayResults(filteredResults);
         
         // Show filter summary
@@ -854,13 +865,6 @@ program
           if (filters.severity) console.log(chalk.dim(`Severity: ${filters.severity.join(', ')}`));
           if (filters.type) console.log(chalk.dim(`Type: ${filters.type}`));
           console.log(chalk.dim(`\nShowing ${filteredResults.length} of ${results.length} dependencies`));
-        }
-      } else if (formatters[options.format]) {
-        const output = await formatters[options.format]({ results: filteredResults }, options.output);
-        if (options.output) {
-          console.log(chalk.green(`Report saved to: ${options.output}`));
-        } else {
-          console.log(output);
         }
       }
 
@@ -893,7 +897,6 @@ function filterDependencies(dependencies, ignorePatterns) {
         new RegExp(pattern.replace(/\*/g, '.*')).test(name)
       )
     )
-  );
 }
 
 program
@@ -1431,7 +1434,7 @@ async function showPackageDetails(dep) {
   console.log(`Downloads:   ${details.downloads}/month`);
   console.log(`Last Update: ${details.lastUpdate}`);
 
-  // Show available actions
+  // Update the action choices to include graph visualization
   const { action } = await inquirer.prompt([
     {
       type: 'list',
@@ -1442,6 +1445,7 @@ async function showPackageDetails(dep) {
         { name: 'Update to Suggested Version', value: 'update-suggested' },
         { name: 'View Changelog', value: 'changelog' },
         { name: 'View Dependencies', value: 'dependencies' },
+        { name: 'View Dependency Graph', value: 'graph' },
         { name: 'Back to List', value: 'back' },
         { name: 'Exit', value: 'exit' }
       ]
@@ -1458,6 +1462,9 @@ async function showPackageDetails(dep) {
       break;
     case 'dependencies':
       await viewDependencies(dep);
+      break;
+    case 'graph':
+      await displayDependencyGraph(dep);
       break;
     case 'exit':
       process.exit(0);
@@ -1566,4 +1573,75 @@ async function viewDependencies(dep) {
   }
   
   await new Promise(resolve => setTimeout(resolve, 5000));
+}
+
+// Add these helper functions after the existing ones
+async function generateDependencyGraph(packagePath) {
+  try {
+    const madgeInstance = await madge(packagePath, {
+      baseDir: packagePath,
+      excludeRegExp: [/node_modules/]
+    });
+
+    const graph = madgeInstance.obj();
+    const circular = madgeInstance.circular();
+    
+    return {
+      dependencies: graph,
+      circular: circular,
+      moduleCount: Object.keys(graph).length,
+      dependencyCount: Object.values(graph).reduce((acc, deps) => acc + deps.length, 0)
+    };
+  } catch (error) {
+    console.error(chalk.red('Error generating dependency graph:', error.message));
+    return null;
+  }
+}
+
+async function displayDependencyGraph(dep) {
+  console.clear();
+  console.log(chalk.bold(`\nDependency Graph for ${dep.name}\n`));
+
+  try {
+    const graph = await generateDependencyGraph(dep.name);
+    
+    if (!graph) {
+      console.log(chalk.yellow('Unable to generate dependency graph'));
+      return;
+    }
+
+    // Display circular dependencies
+    if (graph.circular.length > 0) {
+      console.log(chalk.red('\nCircular Dependencies Detected:'));
+      graph.circular.forEach(circle => {
+        console.log(chalk.red(`  ${circle.join(' → ')}`));
+      });
+    }
+
+    // Display dependency tree
+    console.log(chalk.dim('\nDependency Tree:'));
+    Object.entries(graph.dependencies).forEach(([module, deps]) => {
+      console.log(chalk.blue(`\n${module}`));
+      deps.forEach(dep => {
+        console.log(chalk.dim(`  └─ ${dep}`));
+      });
+    });
+
+    // Display statistics
+    console.log(chalk.dim('\nStatistics:'));
+    console.log(`Total Modules: ${chalk.blue(graph.moduleCount)}`);
+    console.log(`Total Dependencies: ${chalk.blue(graph.dependencyCount)}`);
+    console.log(`Circular Dependencies: ${chalk.red(graph.circular.length)}`);
+
+  } catch (error) {
+    console.error(chalk.red('Error:', error.message));
+  }
+
+  // Wait for user input
+  await new Promise(resolve => {
+    console.log(chalk.dim('\nPress any key to continue...'));
+    process.stdin.once('data', () => {
+      resolve();
+    });
+  });
 }
