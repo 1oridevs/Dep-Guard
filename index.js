@@ -794,92 +794,15 @@ program
   .option('--pattern <regex>', 'Filter by regex pattern')
   .action(async (options) => {
     try {
-      const defaultConfig = {
-        path: options.path || '.',
-        includeDev: options.includeDev || false,
-        allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
-        output: {
-          format: options.format || 'console',
-          silent: false,
-          debug: false
-        }
-      };
+      const results = await performFullScan({
+        ...options,
+        format: options.format
+      });
 
-      const results = await performFullScan(defaultConfig);
-
-      // Apply filters
-      const filters = {
-        status: options.filterStatus?.split(','),
-        name: options.filterName,
-        license: options.filterLicense?.split(','),
-        severity: options.filterSeverity?.split(','),
-        type: options.depsOnly ? 'dependencies' : 
-              options.devDepsOnly ? 'devDependencies' : null,
-        maxSize: options.maxSize ? parseInt(options.maxSize) : undefined,
-        maxGzip: options.maxGzip ? parseInt(options.maxGzip) : undefined,
-        minDownloads: options.minDownloads ? parseInt(options.minDownloads) : undefined,
-        lastUpdate: options.lastUpdate ? parseInt(options.lastUpdate) : undefined,
-        depth: options.maxDepth ? parseInt(options.maxDepth) : undefined,
-        pattern: options.pattern
-      };
-
-      let filteredResults = await filterDependencies(results, filters);
-
-      // Apply sorting
-      if (options.sort) {
-        const sortField = options.sort;
-        filteredResults.sort((a, b) => {
-          let comparison;
-          switch (sortField) {
-            case 'name':
-              comparison = a.name.localeCompare(b.name);
-              break;
-            case 'version':
-              comparison = semver.compare(
-                a.currentVersion.replace(/[\^~]/, ''),
-                b.currentVersion.replace(/[\^~]/, '')
-              );
-              break;
-            case 'license':
-              comparison = a.license.localeCompare(b.license);
-              break;
-            case 'severity':
-              const severityOrder = { CRITICAL: 4, HIGH: 3, MODERATE: 2, LOW: 1, NONE: 0 };
-              comparison = (severityOrder[a.vulnLevel] || 0) - (severityOrder[b.vulnLevel] || 0);
-              break;
-            default:
-              comparison = 0;
-          }
-          return options.reverse ? -comparison : comparison;
-        });
-      }
-
-      // Handle output format
       if (options.format === 'json') {
-        const output = {
-          results: filteredResults,
-          summary: {
-            total: results.length,
-            filtered: filteredResults.length,
-            filters: filters,
-            vulnerabilities: {},
-            licenses: {}
-          }
-        };
-        console.log(JSON.stringify(output, null, 2));
-      } else if (options.format === 'console') {
-        displayResults(filteredResults);
-        
-        // Show filter summary
-        if (Object.values(filters).some(v => v)) {
-          console.log(chalk.dim('\nActive Filters:'));
-          if (filters.status) console.log(chalk.dim(`Status: ${filters.status.join(', ')}`));
-          if (filters.name) console.log(chalk.dim(`Name: ${filters.name}`));
-          if (filters.license) console.log(chalk.dim(`License: ${filters.license.join(', ')}`));
-          if (filters.severity) console.log(chalk.dim(`Severity: ${filters.severity.join(', ')}`));
-          if (filters.type) console.log(chalk.dim(`Type: ${filters.type}`));
-          console.log(chalk.dim(`\nShowing ${filteredResults.length} of ${results.length} dependencies`));
-        }
+        console.log(JSON.stringify(results, null, 2));
+      } else {
+        displayResults(results);
       }
     } catch (error) {
       console.error(chalk.red(`\nError: ${error.message}`));
@@ -1306,12 +1229,28 @@ async function performFullScan(config = {}) {
   }
 
   const endTime = process.hrtime(startTime);
-  const duration = (endTime[0] * 1e9 + endTime[1]) / 1e6; // Convert to milliseconds
+  const duration = (endTime[0] + endTime[1] / 1e9).toFixed(2); // Convert to seconds
   const finalMemoryUsage = process.memoryUsage().heapUsed;
 
-  console.log(`Scan Duration: ${duration.toFixed(2)} ms`);
-  console.log(`Memory Usage: ${((finalMemoryUsage - initialMemoryUsage) / 1024).toFixed(2)} KB`);
-  console.log(`Cache Hits: ${cacheHits}, Cache Misses: ${cacheMisses}`);
+  // Only show performance metrics if not in JSON format
+  if (!config.format || config.format !== 'json') {
+    console.log(`\nScan Duration: ${duration} seconds`);
+    console.log(`Memory Usage: ${((finalMemoryUsage - initialMemoryUsage) / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`Cache Performance: ${cacheHits} hits, ${cacheMisses} misses`);
+  }
+
+  // If JSON format is requested, return structured data
+  if (config.format === 'json') {
+    return {
+      results,
+      performance: {
+        duration: parseFloat(duration),
+        memoryUsage: (finalMemoryUsage - initialMemoryUsage) / 1024 / 1024,
+        cacheHits,
+        cacheMisses
+      }
+    };
+  }
 
   return results;
 }
