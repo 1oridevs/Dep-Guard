@@ -238,7 +238,7 @@ async function scanDependencies(dependencies, type = 'dependencies', allowedLice
 
     const promises = packageNames.map((name, index) => 
       limit(async () => {
-        const { latestVersion, license, versions } = batchResults[name];
+        const { latestVersion, license, versions } = batchResults[index];
         const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(dependencies[name], latestVersion, versions);
         const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
         const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
