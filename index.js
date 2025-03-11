@@ -792,12 +792,68 @@ program
   .option('--last-update <days>', 'Filter by last update (in days)')
   .option('--max-depth <number>', 'Filter by maximum dependency depth')
   .option('--pattern <regex>', 'Filter by regex pattern')
+  .option('--save-preset <name>', 'Save current filters as preset')
+  .option('--load-preset <name>', 'Load saved filter preset')
   .action(async (options) => {
     try {
+      // Load user preferences
+      const prefs = await loadUserPreferences();
+      currentTheme = options.theme || prefs.theme || 'default';
+      verboseMode = options.verbose || prefs.verbose || false;
+
+      // Load filter preset if specified
+      if (options.loadPreset) {
+        const preset = prefs.filterPresets?.[options.loadPreset];
+        if (!preset) {
+          throw new DependencyGuardianError(
+            `Filter preset '${options.loadPreset}' not found`,
+            'PRESET_NOT_FOUND',
+            ['Check available presets with --list-presets', 'Create a new preset with --save-preset']
+          );
+        }
+        options = { ...options, ...preset };
+      }
+
+      // Setup keyboard shortcuts for interactive mode
+      if (!options.quiet && process.stdin.isTTY) {
+        setupKeyboardShortcuts();
+      }
+
       const results = await performFullScan({
         ...options,
-        format: options.format
+        format: options.format,
+        verbose: verboseMode
       });
+
+      // Save filter preset if specified
+      if (options.savePreset) {
+        const filterOptions = {
+          filterStatus: options.filterStatus,
+          filterName: options.filterName,
+          filterLicense: options.filterLicense,
+          filterSeverity: options.filterSeverity,
+          depsOnly: options.depsOnly,
+          devDepsOnly: options.devDepsOnly,
+          maxSize: options.maxSize,
+          maxGzip: options.maxGzip,
+          minDownloads: options.minDownloads,
+          lastUpdate: options.lastUpdate,
+          maxDepth: options.maxDepth,
+          pattern: options.pattern
+        };
+        
+        await saveUserPreferences({
+          ...prefs,
+          filterPresets: {
+            ...prefs.filterPresets,
+            [options.savePreset]: filterOptions
+          }
+        });
+        
+        console.log(themes[currentTheme].success(
+          `Filter preset '${options.savePreset}' saved successfully`
+        ));
+      }
 
       if (options.format === 'json') {
         console.log(JSON.stringify(results, null, 2));
@@ -805,7 +861,15 @@ program
         displayResults(results);
       }
     } catch (error) {
-      console.error(chalk.red(`\nError: ${error.message}`));
+      if (error instanceof DependencyGuardianError) {
+        error.prettyPrint();
+      } else {
+        console.error(themes[currentTheme].error(`\nError: ${error.message}`));
+        if (verboseMode) {
+          console.error(themes[currentTheme].dim('\nStack trace:'));
+          console.error(error.stack);
+        }
+      }
       process.exit(1);
     }
   });
@@ -1786,3 +1850,240 @@ function displayProgress(current, total) {
   const percentage = ((current / total) * 100).toFixed(2);
   process.stdout.write(`\rProgress: ${percentage}% (${current}/${total})`);
 }
+
+// Add after the existing constants
+const themes = {
+  default: {
+    info: chalk.blue,
+    success: chalk.green,
+    warning: chalk.yellow,
+    error: chalk.red,
+    critical: chalk.redBright,
+    dim: chalk.dim,
+    highlight: chalk.cyan,
+    normal: chalk.white
+  },
+  dark: {
+    info: chalk.blueBright,
+    success: chalk.greenBright,
+    warning: chalk.yellowBright,
+    error: chalk.redBright,
+    critical: chalk.bgRed.white,
+    dim: chalk.gray,
+    highlight: chalk.cyanBright,
+    normal: chalk.whiteBright
+  },
+  light: {
+    info: chalk.blue.dim,
+    success: chalk.green.dim,
+    warning: chalk.yellow.dim,
+    error: chalk.red.dim,
+    critical: chalk.bgRed.white.dim,
+    dim: chalk.gray,
+    highlight: chalk.cyan.dim,
+    normal: chalk.white.dim
+  }
+};
+
+// Add to store user preferences
+const userPrefsFile = '.depguard/preferences.json';
+let currentTheme = 'default';
+let verboseMode = false;
+
+// Add these functions for user preferences management
+async function loadUserPreferences() {
+  try {
+    if (fsSync.existsSync(userPrefsFile)) {
+      const prefs = JSON.parse(await fs.readFile(userPrefsFile, 'utf8'));
+      currentTheme = prefs.theme || 'default';
+      verboseMode = prefs.verbose || false;
+      return prefs;
+    }
+  } catch (error) {
+    console.error('Error loading preferences:', error.message);
+  }
+  return { theme: 'default', verbose: false, filterPresets: {} };
+}
+
+async function saveUserPreferences(prefs) {
+  try {
+    await fs.mkdir(path.dirname(userPrefsFile), { recursive: true });
+    await fs.writeFile(userPrefsFile, JSON.stringify(prefs, null, 2));
+  } catch (error) {
+    console.error('Error saving preferences:', error.message);
+  }
+}
+
+// Add error handling utilities
+class DependencyGuardianError extends Error {
+  constructor(message, code, suggestions = []) {
+    super(message);
+    this.name = 'DependencyGuardianError';
+    this.code = code;
+    this.suggestions = suggestions;
+  }
+
+  prettyPrint() {
+    const theme = themes[currentTheme];
+    console.error(theme.error(`\n❌ Error: ${this.message}`));
+    if (this.code) {
+      console.error(theme.dim(`Error Code: ${this.code}`));
+    }
+    if (this.suggestions.length > 0) {
+      console.error(theme.info('\nSuggestions:'));
+      this.suggestions.forEach(suggestion => {
+        console.error(theme.normal(`- ${suggestion}`));
+      });
+    }
+  }
+}
+
+// Add keyboard shortcut handler
+function setupKeyboardShortcuts() {
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+    
+    process.stdin.on('data', (key) => {
+      if (key === '\u0003') { // Ctrl+C
+        process.exit();
+      }
+      
+      switch (key) {
+        case 'q':
+          process.exit(0);
+          break;
+        case 'h':
+          displayHelp();
+          break;
+        case 'r':
+          refreshDisplay();
+          break;
+        case 'f':
+          showFilterMenu();
+          break;
+        case 't':
+          cycleTheme();
+          break;
+        case 'v':
+          toggleVerboseMode();
+          break;
+      }
+    });
+  }
+}
+
+// Add these utility functions
+async function cycleTheme() {
+  const themeNames = Object.keys(themes);
+  const currentIndex = themeNames.indexOf(currentTheme);
+  currentTheme = themeNames[(currentIndex + 1) % themeNames.length];
+  const prefs = await loadUserPreferences();
+  await saveUserPreferences({ ...prefs, theme: currentTheme });
+  console.log(`Theme switched to: ${currentTheme}`);
+  refreshDisplay();
+}
+
+async function toggleVerboseMode() {
+  verboseMode = !verboseMode;
+  const prefs = await loadUserPreferences();
+  await saveUserPreferences({ ...prefs, verbose: verboseMode });
+  console.log(`Verbose mode: ${verboseMode ? 'enabled' : 'disabled'}`);
+  refreshDisplay();
+}
+
+// Add to the program options
+program
+  .option('--theme <theme>', 'Set color theme (default, dark, light)', 'default')
+  .option('--quiet', 'Minimal output')
+  .option('--verbose', 'Detailed output')
+  .option('--save-preset <name>', 'Save current filters as preset')
+  .option('--load-preset <name>', 'Load saved filter preset');
+
+// Modify the scan command to include new features
+program
+  .command('scan')
+  .description('Scan project dependencies for issues')
+  // ... existing options ...
+  .option('--save-preset <name>', 'Save current filters as preset')
+  .option('--load-preset <name>', 'Load saved filter preset')
+  .action(async (options) => {
+    try {
+      // Load user preferences
+      const prefs = await loadUserPreferences();
+      currentTheme = options.theme || prefs.theme || 'default';
+      verboseMode = options.verbose || prefs.verbose || false;
+
+      // Load filter preset if specified
+      if (options.loadPreset) {
+        const preset = prefs.filterPresets?.[options.loadPreset];
+        if (!preset) {
+          throw new DependencyGuardianError(
+            `Filter preset '${options.loadPreset}' not found`,
+            'PRESET_NOT_FOUND',
+            ['Check available presets with --list-presets', 'Create a new preset with --save-preset']
+          );
+        }
+        options = { ...options, ...preset };
+      }
+
+      // Setup keyboard shortcuts for interactive mode
+      if (!options.quiet && process.stdin.isTTY) {
+        setupKeyboardShortcuts();
+      }
+
+      const results = await performFullScan({
+        ...options,
+        format: options.format,
+        verbose: verboseMode
+      });
+
+      // Save filter preset if specified
+      if (options.savePreset) {
+        const filterOptions = {
+          filterStatus: options.filterStatus,
+          filterName: options.filterName,
+          filterLicense: options.filterLicense,
+          filterSeverity: options.filterSeverity,
+          depsOnly: options.depsOnly,
+          devDepsOnly: options.devDepsOnly,
+          maxSize: options.maxSize,
+          maxGzip: options.maxGzip,
+          minDownloads: options.minDownloads,
+          lastUpdate: options.lastUpdate,
+          maxDepth: options.maxDepth,
+          pattern: options.pattern
+        };
+        
+        await saveUserPreferences({
+          ...prefs,
+          filterPresets: {
+            ...prefs.filterPresets,
+            [options.savePreset]: filterOptions
+          }
+        });
+        
+        console.log(themes[currentTheme].success(
+          `Filter preset '${options.savePreset}' saved successfully`
+        ));
+      }
+
+      if (options.format === 'json') {
+        console.log(JSON.stringify(results, null, 2));
+      } else {
+        displayResults(results);
+      }
+    } catch (error) {
+      if (error instanceof DependencyGuardianError) {
+        error.prettyPrint();
+      } else {
+        console.error(themes[currentTheme].error(`\nError: ${error.message}`));
+        if (verboseMode) {
+          console.error(themes[currentTheme].dim('\nStack trace:'));
+          console.error(error.stack);
+        }
+      }
+      process.exit(1);
+    }
+  });
