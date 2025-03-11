@@ -841,9 +841,9 @@ program
           minDownloads: options.minDownloads,
           lastUpdate: options.lastUpdate,
           maxDepth: options.maxDepth,
-          pattern: options.pattern
-        };
-        
+        pattern: options.pattern
+      };
+
         await saveUserPreferences({
           ...prefs,
           filterPresets: {
@@ -1497,8 +1497,8 @@ class InteractiveMode {
     if (!pkg) return;
 
     const { action } = await inquirer.prompt([
-      {
-        type: 'list',
+        {
+          type: 'list',
         name: 'action',
         message: `Select action for ${pkg.name}`,
         choices: [
@@ -2011,7 +2011,7 @@ async function runCICheck() {
   try {
     const config = await loadConfig();
     const results = await performFullScan({
-      includeDev: true,
+    includeDev: true,
       allowedLicenses: config.allowedLicenses
     });
     
