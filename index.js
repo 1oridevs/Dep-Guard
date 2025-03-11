@@ -104,10 +104,122 @@ function deepMerge(target, source) {
   return output;
 }
 
+// Move all command registrations to one place, before program.parse()
 program
   .name('dependency-guardian')
   .description('A CLI tool to scan Node.js project dependencies for outdated packages, license compliance, and vulnerabilities')
   .version('1.0.0');
+
+// Register the analyze command
+program
+  .command('analyze')
+  .description('Perform advanced analysis on dependencies')
+  .action(async () => {
+    const spinner = ora('Analyzing dependencies...').start();
+    
+    try {
+      const projectPath = process.cwd();
+      const packageJson = await readPackageJson(projectPath);
+      const dependencies = packageJson.dependencies || {};
+      
+      if (Object.keys(dependencies).length === 0) {
+        spinner.info('No dependencies found in package.json');
+        return;
+      }
+
+      // Analyze dependency tree
+      spinner.text = 'Analyzing dependency tree...';
+      const tree = await analyzeDependencyTree(projectPath);
+      
+      if (Object.keys(tree).length === 0) {
+        spinner.info('No dependencies found in node_modules');
+        return;
+      }
+      
+      spinner.succeed('Dependency tree analysis complete');
+      
+      console.log('\nDependency Analysis Results:');
+      console.log('----------------------------');
+
+      // Detect circular dependencies
+      spinner.start('Checking for circular dependencies...');
+      const circularDeps = detectCircularDependencies(tree);
+      spinner.stop();
+      
+      if (circularDeps.length > 0) {
+        console.log(chalk.yellow('\n⚠️  Circular Dependencies Detected:'));
+        circularDeps.forEach(dep => {
+          console.log(chalk.dim(`- ${dep}`));
+        });
+      } else {
+        console.log(chalk.green('\n✅ No Circular Dependencies Detected'));
+      }
+
+      // Analyze bundle sizes
+      console.log('\nBundle Size Analysis:');
+      console.log('-------------------');
+      const bundleSpinner = ora('Analyzing bundle sizes...').start();
+      
+      for (const [name, version] of Object.entries(dependencies)) {
+        try {
+          const bundleInfo = await analyzeBundleSize(name, version);
+          if (bundleInfo) {
+            const sizeInKb = (bundleInfo.gzip / 1024).toFixed(2);
+            bundleSpinner.info(
+              `${name}@${version}: ${sizeInKb}kb (gzipped) | ${bundleInfo.dependencyCount} dependencies`
+            );
+          }
+        } catch (error) {
+          bundleSpinner.warn(`Failed to analyze ${name}: ${error.message}`);
+        }
+      }
+      bundleSpinner.stop();
+
+      // Detect duplicate dependencies
+      spinner.start('Checking for duplicate dependencies...');
+      const duplicates = detectDuplicateDependencies(dependencies);
+      spinner.stop();
+      
+      if (duplicates.length > 0) {
+        console.log(chalk.yellow('\n⚠️  Duplicate Dependencies Found:'));
+        duplicates.forEach(({ name, version }) => {
+          console.log(chalk.dim(`- ${name}@${version}`));
+        });
+      } else {
+        console.log(chalk.green('\n✅ No Duplicate Dependencies Found'));
+      }
+
+      console.log('\nAnalysis complete! 🎉');
+
+    } catch (error) {
+      spinner.fail(chalk.red(`Analysis failed: ${error.message}`));
+      if (process.env.DEBUG) {
+        console.error(error);
+      }
+      process.exit(1);
+    }
+  });
+
+// Register other commands here...
+program
+  .command('scan')
+  .description('Scan dependencies for issues')
+  .action(/* ... */);
+
+program
+  .command('interactive')
+  .alias('i')
+  .description('Start interactive mode')
+  .action(/* ... */);
+
+program
+  .command('ci')
+  .description('Run in CI mode')
+  .option('--report <format>', 'Report format (junit, json)', 'junit')
+  .action(/* ... */);
+
+// Add this at the very end of the file
+program.parse(process.argv);
 
 function displayWelcome() {
   console.log(chalk.blue.bold('\n🛡️  Welcome to Dependency Guardian 🛡️\n'));
@@ -1758,13 +1870,6 @@ program.on('command:*', function () {
   process.exit(1);
 });
 
-program.parse(process.argv);
-
-if (!process.argv.slice(2).length) {
-  displayWelcome();
-  program.help();
-}
-
 async function loadPolicies(policyPaths) {
   const policies = new Map();
   
@@ -2707,4 +2812,107 @@ async function loadConfig() {
     console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
     return defaultConfig;
   }
+}
+
+// Function to analyze the dependency tree
+async function analyzeDependencyTree(projectPath) {
+  try {
+    // First read package.json to get dependencies
+    const packageJson = await readPackageJson(projectPath);
+    const dependencies = {
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies
+    };
+
+    // Create a simple tree structure from package.json
+    const tree = {};
+    
+    // Get installed dependencies from node_modules
+    for (const [name, version] of Object.entries(dependencies)) {
+      try {
+        const depPackageJsonPath = path.join(projectPath, 'node_modules', name, 'package.json');
+        const depPackageJson = JSON.parse(await fs.readFile(depPackageJsonPath, 'utf8'));
+        
+        tree[name] = Object.keys(depPackageJson.dependencies || {});
+      } catch (error) {
+        // If we can't read the dependency's package.json, just mark it as a leaf node
+        tree[name] = [];
+      }
+    }
+
+    return tree;
+  } catch (error) {
+    throw new Error(`Failed to analyze dependency tree: ${error.message}`);
+  }
+}
+
+// Function to detect circular dependencies
+function detectCircularDependencies(tree) {
+  const visited = new Map();
+  const circularDeps = new Set();
+
+  function visit(node, path = []) {
+    if (visited.has(node)) {
+      const cycleStart = path.indexOf(node);
+      if (cycleStart !== -1) {
+        const cycle = path.slice(cycleStart).concat(node);
+        circularDeps.add(cycle.join(' → '));
+      }
+      return;
+    }
+
+    visited.set(node, true);
+    path.push(node);
+
+    const dependencies = tree[node] || [];
+    for (const dep of dependencies) {
+      visit(dep, [...path]);
+    }
+
+    path.pop();
+    visited.delete(node);
+  }
+
+  try {
+    Object.keys(tree).forEach(node => {
+      if (!visited.has(node)) {
+        visit(node);
+      }
+    });
+
+    return Array.from(circularDeps);
+  } catch (error) {
+    throw new Error(`Failed to detect circular dependencies: ${error.message}`);
+  }
+}
+
+// Function to analyze bundle size
+async function analyzeBundleSize(packageName, version) {
+  try {
+    const response = await axios.get(`https://bundlephobia.com/api/size?package=${packageName}@${version}`);
+    return {
+      size: response.data.size,
+      gzip: response.data.gzip,
+      dependencyCount: response.data.dependencyCount
+    };
+  } catch (error) {
+    console.error(`Failed to fetch bundle size for ${packageName}: ${error.message}`);
+    return null;
+  }
+}
+
+// Function to detect duplicate dependencies
+function detectDuplicateDependencies(dependencies) {
+  const seen = {};
+  const duplicates = [];
+
+  for (const [name, version] of Object.entries(dependencies)) {
+    if (seen[name]) {
+      duplicates.push({ name, version });
+    } else {
+      seen[name] = version;
+    }
+  }
+
+  return duplicates;
 }
