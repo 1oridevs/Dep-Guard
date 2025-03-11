@@ -1029,38 +1029,551 @@ program
     program.help();
   });
 
+// First define the themes
+const themes = {
+  default: {
+    info: chalk.blue,
+    success: chalk.green,
+    warning: chalk.yellow,
+    error: chalk.red,
+    critical: chalk.redBright,
+    dim: chalk.dim,
+    highlight: chalk.cyan,
+    normal: chalk.white,
+    title: chalk.blue.bold,
+    border: 'blue'
+  },
+  dark: {
+    info: chalk.blueBright,
+    success: chalk.greenBright,
+    warning: chalk.yellowBright,
+    error: chalk.redBright,
+    critical: chalk.bgRed.white,
+    dim: chalk.gray,
+    highlight: chalk.cyanBright,
+    normal: chalk.whiteBright,
+    title: chalk.cyanBright.bold,
+    border: 'cyan'
+  },
+  light: {
+    info: chalk.blue.dim,
+    success: chalk.green.dim,
+    warning: chalk.yellow.dim,
+    error: chalk.red.dim,
+    critical: chalk.bgRed.white.dim,
+    dim: chalk.gray,
+    highlight: chalk.cyan.dim,
+    normal: chalk.white.dim,
+    title: chalk.blue,
+    border: 'gray'
+  }
+};
+
+let currentTheme = 'default';
+let verboseMode = false;
+
+// Add visual status indicators and colors
+const statusIcons = {
+  major: '🔴', // Major update needed
+  minor: '🟡', // Minor update available
+  patch: '🟢', // Patch update available
+  'UP-TO-DATE': '✅', // Up to date
+  security: '🛡️', // Has security issues
+  license: '⚖️', // Has license issues
+  deprecated: '⚠️', // Deprecated package
+  unknown: '❓', // Unknown status
+};
+
+// Then define the InteractiveMode class with all its methods
+class InteractiveMode {
+  constructor() {
+    this.currentView = 'main';
+    this.selectedIndex = 0;
+    this.results = [];
+    this.filters = {};
+    this.theme = themes[currentTheme];
+    this.modules = {};
+    this.searchQuery = '';
+    this.filterStatus = 'all';
+    this.sortBy = 'name';
+    this.showHelp = false;
+    this.pageSize = process.stdout.rows - 15; // Adjust for screen size
+    this.currentPage = 0;
+    this.loading = false;
+    this.lastAction = null;
+  }
+
+  async loadModules() {
+    const [boxen, clear, figlet] = await Promise.all([
+      import('boxen'),
+      import('clear'),
+      import('figlet')
+    ]);
+
+    this.modules = {
+      boxen: boxen.default,
+      clear: clear.default,
+      figlet: figlet.default
+    };
+  }
+
+  async start() {
+    await this.loadModules();
+    this.modules.clear();
+    await this.showWelcomeScreen();
+    await this.performInitialScan();
+    this.setupKeyboardControls();
+    this.render();
+  }
+
+  async showWelcomeScreen() {
+    const welcomeBox = this.modules.boxen(
+      this.theme.title(
+        this.modules.figlet.textSync('Dep Guardian', { horizontalLayout: 'full' })
+      ) +
+      '\n\n' +
+      this.theme.normal('Interactive Dependency Management') +
+      '\n\n' +
+      this.theme.info('Scanning your dependencies...') +
+      '\n\n' +
+      this.theme.dim('This might take a moment...'),
+      {
+        padding: 1,
+        margin: 1,
+        borderStyle: 'double',
+        borderColor: this.theme.border,
+        float: 'center'
+      }
+    );
+    console.log(welcomeBox);
+  }
+
+  async performInitialScan() {
+    const spinner = ora({
+      text: 'Scanning dependencies...',
+      color: 'blue'
+    }).start();
+    
+    try {
+      this.results = await performFullScan();
+      this.filteredResults = [...this.results];
+      spinner.succeed('Scan complete');
+    } catch (error) {
+      spinner.fail('Scan failed');
+      console.error(this.theme.error(error.message));
+    }
+  }
+
+  setupKeyboardControls() {
+    if (!process.stdin.isTTY) return;
+
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+
+    process.stdin.on('data', async (key) => {
+      if (key === '\u0003' || key === 'q') { // Ctrl+C or q
+        this.exit();
+      }
+
+      switch (key) {
+        case '?':
+          this.showHelp = !this.showHelp;
+          break;
+        case 'h':
+          this.currentView = 'main';
+          break;
+        case 'f':
+          await this.showFilterPrompt();
+          break;
+        case 's':
+          await this.showSortPrompt();
+          break;
+        case '/':
+          await this.showSearchPrompt();
+          break;
+        case 't':
+          await this.cycleTheme();
+          break;
+        case 'v':
+          await this.toggleVerboseMode();
+          break;
+        case 'r':
+          await this.refresh();
+          break;
+        case '\r': // Enter
+          await this.handleEnter();
+          break;
+        case '\u001b[A': // Up arrow
+          this.moveSelection(-1);
+          break;
+        case '\u001b[B': // Down arrow
+          this.moveSelection(1);
+          break;
+        case '\u001b[5~': // Page Up
+          this.moveSelection(-10);
+          break;
+        case '\u001b[6~': // Page Down
+          this.moveSelection(10);
+          break;
+      }
+      this.render();
+    });
+  }
+
+  async showFilterPrompt() {
+    const { status } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'status',
+        message: 'Filter by status:',
+        choices: [
+          { name: 'All packages', value: 'all' },
+          { name: 'Needs update', value: 'outdated' },
+          { name: 'Security issues', value: 'security' },
+          { name: 'License issues', value: 'license' },
+          { name: 'Up to date', value: 'current' }
+        ]
+      }
+    ]);
+
+    this.filterStatus = status;
+    this.applyFilters();
+  }
+
+  async showSortPrompt() {
+    const { sortBy } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'sortBy',
+        message: 'Sort by:',
+        choices: [
+          { name: 'Name', value: 'name' },
+          { name: 'Status', value: 'status' },
+          { name: 'Security Risk', value: 'security' },
+          { name: 'License', value: 'license' }
+        ]
+      }
+    ]);
+
+    this.sortBy = sortBy;
+    this.applySort();
+  }
+
+  async showSearchPrompt() {
+    const { query } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'query',
+        message: 'Search packages:',
+        prefix: '🔍'
+      }
+    ]);
+
+    this.searchQuery = query;
+    this.applyFilters();
+  }
+
+  applyFilters() {
+    let filtered = [...this.results];
+
+    // Apply search filter
+    if (this.searchQuery) {
+      filtered = filtered.filter(pkg => 
+        pkg.name.toLowerCase().includes(this.searchQuery.toLowerCase())
+      );
+    }
+
+    // Apply status filter
+    switch (this.filterStatus) {
+      case 'outdated':
+        filtered = filtered.filter(pkg => pkg.versionStatus !== 'UP-TO-DATE');
+        break;
+      case 'security':
+        filtered = filtered.filter(pkg => pkg.vulnCount > 0);
+        break;
+      case 'license':
+        filtered = filtered.filter(pkg => pkg.licenseStatus === 'NON-COMPLIANT');
+        break;
+      case 'current':
+        filtered = filtered.filter(pkg => pkg.versionStatus === 'UP-TO-DATE');
+        break;
+    }
+
+    this.filteredResults = filtered;
+    this.applySort();
+  }
+
+  applySort() {
+    this.filteredResults.sort((a, b) => {
+      switch (this.sortBy) {
+        case 'name':
+          return a.name.localeCompare(b.name);
+        case 'status':
+          return this.getStatusWeight(b) - this.getStatusWeight(a);
+        case 'security':
+          return b.vulnCount - a.vulnCount;
+        case 'license':
+          return (b.licenseStatus === 'NON-COMPLIANT') - (a.licenseStatus === 'NON-COMPLIANT');
+        default:
+          return 0;
+      }
+    });
+  }
+
+  getStatusWeight(pkg) {
+    const weights = {
+      'major': 4,
+      'minor': 3,
+      'patch': 2,
+      'UP-TO-DATE': 1,
+      'ERROR': 0
+    };
+    return weights[pkg.versionStatus] || 0;
+  }
+
+  moveSelection(delta) {
+    this.selectedIndex = Math.max(0, Math.min(
+      this.selectedIndex + delta,
+      this.filteredResults.length - 1
+    ));
+  }
+
+  render() {
+    this.modules.clear();
+    
+    // Header with stats and current filters
+    const stats = this.getStats();
+    console.log(this.modules.boxen(
+      this.theme.title('Dependency Guardian') +
+      '\n\n' +
+      this.formatStats(stats) +
+      (this.lastAction ? `\n\n${this.theme.dim(this.lastAction)}` : ''),
+      {
+        padding: 1,
+        borderStyle: 'round',
+        borderColor: this.theme.border,
+        float: 'left'
+      }
+    ));
+
+    // Package list with enhanced status display
+    const startIdx = this.currentPage * this.pageSize;
+    const endIdx = Math.min(startIdx + this.pageSize, this.filteredResults.length);
+    const pageCount = Math.ceil(this.filteredResults.length / this.pageSize);
+
+    this.filteredResults.slice(startIdx, endIdx).forEach((pkg, idx) => {
+      const isSelected = (startIdx + idx) === this.selectedIndex;
+      const { icons, details } = this.getPackageStatusInfo(pkg);
+      const prefix = isSelected ? this.theme.highlight('❯ ') : '  ';
+      const nameColor = isSelected ? this.theme.highlight : this.getStatusColor(pkg);
+      
+      console.log(
+        prefix +
+        nameColor(pkg.name.padEnd(30)) +
+        this.theme.dim(pkg.currentVersion.padEnd(15)) +
+        this.theme.info('→') +
+        this.theme.dim(pkg.latestVersion.padEnd(15)) +
+        ' ' + icons +
+        (isSelected ? `\n    ${this.theme.dim(details)}` : '')
+      );
+    });
+
+    // Footer with pagination and active filters
+    const footer = [
+      `Page ${this.currentPage + 1}/${pageCount}`,
+      `Filter: ${this.filterStatus}`,
+      `Sort: ${this.sortBy}`,
+      this.searchQuery ? `Search: ${this.searchQuery}` : null
+    ].filter(Boolean).join(' | ');
+
+    console.log('\n' + this.theme.dim(footer));
+
+    // Help panel
+    if (this.showHelp) {
+      this.renderHelpPanel();
+    } else {
+      console.log('\n' + this.theme.dim('Press ? for help'));
+    }
+  }
+
+  renderHelpPanel() {
+    const helpContent = [
+      ['Navigation', [
+        ['↑/↓', 'Navigate packages'],
+        ['PgUp/PgDn', 'Jump pages'],
+        ['Home/End', 'First/Last package']
+      ]],
+      ['Actions', [
+        ['Enter', 'Package details'],
+        ['u', 'Update package'],
+        ['i', 'Package info'],
+        ['c', 'View changelog']
+      ]],
+      ['Filters & Sort', [
+        ['f', 'Filter menu'],
+        ['s', 'Sort menu'],
+        ['/', 'Search'],
+        ['x', 'Clear filters']
+      ]],
+      ['Display', [
+        ['?', 'Toggle help'],
+        ['t', 'Change theme'],
+        ['v', 'Toggle verbose'],
+        ['r', 'Refresh data']
+      ]]
+    ];
+
+    const helpBox = helpContent.map(([section, commands]) => {
+      return this.theme.title(section) + '\n' +
+        commands.map(([key, desc]) => 
+          `${this.theme.highlight(key.padEnd(10))}${this.theme.normal(desc)}`
+        ).join('\n');
+    }).join('\n\n');
+
+    console.log(this.modules.boxen(helpBox, {
+      padding: 1,
+      margin: { top: 1 },
+      borderStyle: 'round',
+      borderColor: this.theme.border,
+      float: 'right'
+    }));
+  }
+
+  getStats() {
+    const total = this.results.length;
+    const outdated = this.results.filter(p => p.versionStatus !== 'UP-TO-DATE').length;
+    const security = this.results.filter(p => p.vulnCount > 0).length;
+    const license = this.results.filter(p => p.licenseStatus === 'NON-COMPLIANT').length;
+
+    return { total, outdated, security, license };
+  }
+
+  formatStats({ total, outdated, security, license }) {
+    return [
+      `Total: ${this.theme.normal(total)}`,
+      `Updates: ${outdated > 0 ? this.theme.warning(outdated) : this.theme.success(0)}`,
+      `Security: ${security > 0 ? this.theme.error(security) : this.theme.success(0)}`,
+      `License: ${license > 0 ? this.theme.error(license) : this.theme.success(0)}`
+    ].join(' | ');
+  }
+
+  getPackageStatusInfo(pkg) {
+    const icons = [];
+    const details = [];
+
+    // Version status
+    if (pkg.versionStatus !== 'UP-TO-DATE') {
+      icons.push(statusIcons[pkg.versionStatus]);
+      const updateType = pkg.versionStatus === 'major' ? 'Breaking change' : 
+                        pkg.versionStatus === 'minor' ? 'New features' : 'Bug fixes';
+      details.push(`${updateType} available`);
+    }
+
+    // Security status
+    if (pkg.vulnCount > 0) {
+      icons.push(statusIcons.security);
+      details.push(`${pkg.vulnCount} ${pkg.vulnLevel} vulnerabilities`);
+    }
+
+    // License status
+    if (pkg.licenseStatus === 'NON-COMPLIANT') {
+      icons.push(statusIcons.license);
+      details.push(`License issue: ${pkg.license}`);
+    }
+
+    return {
+      icons: icons.join(' '),
+      details: details.join(' | ')
+    };
+  }
+
+  getStatusColor(pkg) {
+    switch (pkg.versionStatus) {
+      case 'major': return this.theme.error;
+      case 'minor': return this.theme.warning;
+      case 'patch': return this.theme.info;
+      case 'UP-TO-DATE': return this.theme.success;
+      default: return this.theme.normal;
+    }
+  }
+
+  async handleEnter() {
+    switch (this.currentView) {
+      case 'main':
+        this.currentView = 'details';
+        break;
+      case 'filters':
+        await this.applyFilter();
+        break;
+      case 'details':
+        await this.showPackageActions();
+        break;
+    }
+  }
+
+  async showPackageActions() {
+    const pkg = this.results[this.selectedIndex];
+    if (!pkg) return;
+
+    const { action } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'action',
+        message: `Select action for ${pkg.name}`,
+        choices: [
+          { name: 'Update to Latest', value: 'update-latest' },
+          { name: 'View Changelog', value: 'changelog' },
+          { name: 'View Dependencies', value: 'dependencies' },
+          { name: 'View Security Info', value: 'security' },
+          { name: 'View License', value: 'license' },
+          { name: 'Back', value: 'back' }
+        ]
+      }
+    ]);
+
+    switch (action) {
+      case 'update-latest':
+        await this.updatePackage(pkg);
+        break;
+      case 'changelog':
+        await this.viewChangelog(pkg);
+        break;
+      case 'dependencies':
+        await this.viewDependencies(pkg);
+        break;
+      case 'security':
+        await this.viewSecurity(pkg);
+        break;
+      case 'license':
+        await this.viewLicense(pkg);
+        break;
+    }
+  }
+
+  async refresh() {
+    await this.performInitialScan();
+    this.render();
+  }
+
+  exit() {
+    this.modules.clear();
+    console.log(chalk.blue('Thanks for using Dependency Guardian!'));
+    process.exit(0);
+  }
+}
+
+// Then add the program command
 program
   .command('interactive')
   .alias('i')
-  .description('Run in interactive mode')
-  .option('-p, --path <path>', 'project path')
-  .action(async (options) => {
+  .description('Start interactive mode')
+  .action(async () => {
     try {
-      displayWelcome();
-      const results = await performFullScan({
-        path: options.path || '.',
-        includeDev: true
-      });
-
-      const choices = results.map(dep => ({
-        name: `${dep.name} (${dep.currentVersion} → ${dep.latestVersion})`,
-        value: dep,
-        short: dep.name
-      }));
-
-      const { selectedDep } = await inquirer.prompt([
-        {
-          type: 'list',
-          name: 'selectedDep',
-          message: 'Select a package to view/update:',
-          choices,
-          pageSize: 15
-        }
-      ]);
-
-      await showPackageDetails(selectedDep);
+      const interactive = new InteractiveMode();
+      await interactive.start();
     } catch (error) {
-      console.error(chalk.red(`\nError: ${error.message}`));
+      console.error(chalk.red('Error in interactive mode:', error.message));
       process.exit(1);
     }
   });
@@ -1851,44 +2364,8 @@ function displayProgress(current, total) {
   process.stdout.write(`\rProgress: ${percentage}% (${current}/${total})`);
 }
 
-// Add after the existing constants
-const themes = {
-  default: {
-    info: chalk.blue,
-    success: chalk.green,
-    warning: chalk.yellow,
-    error: chalk.red,
-    critical: chalk.redBright,
-    dim: chalk.dim,
-    highlight: chalk.cyan,
-    normal: chalk.white
-  },
-  dark: {
-    info: chalk.blueBright,
-    success: chalk.greenBright,
-    warning: chalk.yellowBright,
-    error: chalk.redBright,
-    critical: chalk.bgRed.white,
-    dim: chalk.gray,
-    highlight: chalk.cyanBright,
-    normal: chalk.whiteBright
-  },
-  light: {
-    info: chalk.blue.dim,
-    success: chalk.green.dim,
-    warning: chalk.yellow.dim,
-    error: chalk.red.dim,
-    critical: chalk.bgRed.white.dim,
-    dim: chalk.gray,
-    highlight: chalk.cyan.dim,
-    normal: chalk.white.dim
-  }
-};
-
 // Add to store user preferences
 const userPrefsFile = '.depguard/preferences.json';
-let currentTheme = 'default';
-let verboseMode = false;
 
 // Add these functions for user preferences management
 async function loadUserPreferences() {
@@ -2000,90 +2477,3 @@ program
   .option('--verbose', 'Detailed output')
   .option('--save-preset <name>', 'Save current filters as preset')
   .option('--load-preset <name>', 'Load saved filter preset');
-
-// Modify the scan command to include new features
-program
-  .command('scan')
-  .description('Scan project dependencies for issues')
-  // ... existing options ...
-  .option('--save-preset <name>', 'Save current filters as preset')
-  .option('--load-preset <name>', 'Load saved filter preset')
-  .action(async (options) => {
-    try {
-      // Load user preferences
-      const prefs = await loadUserPreferences();
-      currentTheme = options.theme || prefs.theme || 'default';
-      verboseMode = options.verbose || prefs.verbose || false;
-
-      // Load filter preset if specified
-      if (options.loadPreset) {
-        const preset = prefs.filterPresets?.[options.loadPreset];
-        if (!preset) {
-          throw new DependencyGuardianError(
-            `Filter preset '${options.loadPreset}' not found`,
-            'PRESET_NOT_FOUND',
-            ['Check available presets with --list-presets', 'Create a new preset with --save-preset']
-          );
-        }
-        options = { ...options, ...preset };
-      }
-
-      // Setup keyboard shortcuts for interactive mode
-      if (!options.quiet && process.stdin.isTTY) {
-        setupKeyboardShortcuts();
-      }
-
-      const results = await performFullScan({
-        ...options,
-        format: options.format,
-        verbose: verboseMode
-      });
-
-      // Save filter preset if specified
-      if (options.savePreset) {
-        const filterOptions = {
-          filterStatus: options.filterStatus,
-          filterName: options.filterName,
-          filterLicense: options.filterLicense,
-          filterSeverity: options.filterSeverity,
-          depsOnly: options.depsOnly,
-          devDepsOnly: options.devDepsOnly,
-          maxSize: options.maxSize,
-          maxGzip: options.maxGzip,
-          minDownloads: options.minDownloads,
-          lastUpdate: options.lastUpdate,
-          maxDepth: options.maxDepth,
-          pattern: options.pattern
-        };
-        
-        await saveUserPreferences({
-          ...prefs,
-          filterPresets: {
-            ...prefs.filterPresets,
-            [options.savePreset]: filterOptions
-          }
-        });
-        
-        console.log(themes[currentTheme].success(
-          `Filter preset '${options.savePreset}' saved successfully`
-        ));
-      }
-
-      if (options.format === 'json') {
-        console.log(JSON.stringify(results, null, 2));
-      } else {
-        displayResults(results);
-      }
-    } catch (error) {
-      if (error instanceof DependencyGuardianError) {
-        error.prettyPrint();
-      } else {
-        console.error(themes[currentTheme].error(`\nError: ${error.message}`));
-        if (verboseMode) {
-          console.error(themes[currentTheme].dim('\nStack trace:'));
-          console.error(error.stack);
-        }
-      }
-      process.exit(1);
-    }
-  });
