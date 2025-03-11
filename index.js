@@ -114,7 +114,9 @@ program
 program
   .command('analyze')
   .description('Perform advanced analysis on dependencies')
-  .action(async () => {
+  .option('--ci', 'Run in CI mode (exits with error code on issues)')
+  .option('--json', 'Output results in JSON format')
+  .action(async (options) => {
     const spinner = ora('Analyzing dependencies...').start();
     
     try {
@@ -124,53 +126,78 @@ program
       
       if (Object.keys(dependencies).length === 0) {
         spinner.info('No dependencies found in package.json');
+        if (options.ci) process.exit(0);
         return;
       }
+
+      // Store results for final output
+      const results = {
+        dependencies: Object.keys(dependencies).length,
+        tree: {},
+        circular: [],
+        bundleSizes: {},
+        duplicates: []
+      };
 
       // Analyze dependency tree
       spinner.text = 'Analyzing dependency tree...';
       const tree = await analyzeDependencyTree(projectPath);
+      results.tree = tree;
       
       if (Object.keys(tree).length === 0) {
         spinner.info('No dependencies found in node_modules');
+        if (options.ci) process.exit(0);
         return;
       }
       
       spinner.succeed('Dependency tree analysis complete');
-      
-      console.log('\nDependency Analysis Results:');
-      console.log('----------------------------');
+
+      // Only show detailed output if not in JSON mode
+      if (!options.json) {
+        console.log('\nDependency Analysis Results:');
+        console.log('----------------------------');
+      }
 
       // Detect circular dependencies
       spinner.start('Checking for circular dependencies...');
       const circularDeps = detectCircularDependencies(tree);
+      results.circular = circularDeps;
       spinner.stop();
       
-      if (circularDeps.length > 0) {
-        console.log(chalk.yellow('\n⚠️  Circular Dependencies Detected:'));
-        circularDeps.forEach(dep => {
-          console.log(chalk.dim(`- ${dep}`));
-        });
-      } else {
-        console.log(chalk.green('\n✅ No Circular Dependencies Detected'));
+      if (!options.json) {
+        if (circularDeps.length > 0) {
+          console.log(chalk.yellow('\n⚠️  Circular Dependencies Detected:'));
+          circularDeps.forEach(dep => {
+            console.log(chalk.dim(`- ${dep}`));
+          });
+        } else {
+          console.log(chalk.green('\n✅ No Circular Dependencies Detected'));
+        }
       }
 
       // Analyze bundle sizes
-      console.log('\nBundle Size Analysis:');
-      console.log('-------------------');
-      const bundleSpinner = ora('Analyzing bundle sizes...').start();
+      if (!options.json) {
+        console.log('\nBundle Size Analysis:');
+        console.log('-------------------');
+      }
       
+      const bundleSpinner = ora('Analyzing bundle sizes...').start();
       for (const [name, version] of Object.entries(dependencies)) {
         try {
           const bundleInfo = await analyzeBundleSize(name, version);
           if (bundleInfo) {
-            const sizeInKb = (bundleInfo.gzip / 1024).toFixed(2);
-            bundleSpinner.info(
-              `${name}@${version}: ${sizeInKb}kb (gzipped) | ${bundleInfo.dependencyCount} dependencies`
-            );
+            results.bundleSizes[name] = bundleInfo;
+            if (!options.json) {
+              const sizeInKb = (bundleInfo.gzip / 1024).toFixed(2);
+              bundleSpinner.info(
+                `${name}@${version}: ${sizeInKb}kb (gzipped) | ${bundleInfo.dependencyCount} dependencies`
+              );
+            }
           }
         } catch (error) {
-          bundleSpinner.warn(`Failed to analyze ${name}: ${error.message}`);
+          if (!options.json) {
+            bundleSpinner.warn(`Failed to analyze ${name}: ${error.message}`);
+          }
         }
       }
       bundleSpinner.stop();
@@ -178,18 +205,31 @@ program
       // Detect duplicate dependencies
       spinner.start('Checking for duplicate dependencies...');
       const duplicates = detectDuplicateDependencies(dependencies);
+      results.duplicates = duplicates;
       spinner.stop();
       
-      if (duplicates.length > 0) {
-        console.log(chalk.yellow('\n⚠️  Duplicate Dependencies Found:'));
-        duplicates.forEach(({ name, version }) => {
-          console.log(chalk.dim(`- ${name}@${version}`));
-        });
-      } else {
-        console.log(chalk.green('\n✅ No Duplicate Dependencies Found'));
+      if (!options.json) {
+        if (duplicates.length > 0) {
+          console.log(chalk.yellow('\n⚠️  Duplicate Dependencies Found:'));
+          duplicates.forEach(({ name, version }) => {
+            console.log(chalk.dim(`- ${name}@${version}`));
+          });
+        } else {
+          console.log(chalk.green('\n✅ No Duplicate Dependencies Found'));
+        }
+
+        console.log('\nAnalysis complete! 🎉');
       }
 
-      console.log('\nAnalysis complete! 🎉');
+      // Output JSON if requested
+      if (options.json) {
+        console.log(JSON.stringify(results, null, 2));
+      }
+
+      // Exit with error code in CI mode if issues found
+      if (options.ci && (circularDeps.length > 0 || duplicates.length > 0)) {
+        process.exit(1);
+      }
 
     } catch (error) {
       spinner.fail(chalk.red(`Analysis failed: ${error.message}`));
