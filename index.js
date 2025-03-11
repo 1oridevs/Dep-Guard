@@ -1552,7 +1552,14 @@ class InteractiveMode {
   }
 
   async refresh() {
+    this.loading = true;
+    this.lastAction = 'Refreshing dependency data...';
+    this.render();
+
     await this.performInitialScan();
+    
+    this.loading = false;
+    this.lastAction = 'Refresh complete';
     this.render();
   }
 
@@ -1560,6 +1567,155 @@ class InteractiveMode {
     this.modules.clear();
     console.log(chalk.blue('Thanks for using Dependency Guardian!'));
     process.exit(0);
+  }
+
+  async cycleTheme() {
+    const themeNames = Object.keys(themes);
+    const currentIndex = themeNames.indexOf(currentTheme);
+    currentTheme = themeNames[(currentIndex + 1) % themeNames.length];
+    this.theme = themes[currentTheme];
+    
+    const prefs = await loadUserPreferences();
+    await saveUserPreferences({ ...prefs, theme: currentTheme });
+    
+    this.lastAction = `Theme switched to: ${currentTheme}`;
+    this.render();
+  }
+
+  async toggleVerboseMode() {
+    verboseMode = !verboseMode;
+    const prefs = await loadUserPreferences();
+    await saveUserPreferences({ ...prefs, verbose: verboseMode });
+    
+    this.lastAction = `Verbose mode: ${verboseMode ? 'enabled' : 'disabled'}`;
+    this.render();
+  }
+
+  async updatePackage(pkg) {
+    this.loading = true;
+    this.lastAction = `Updating ${pkg.name}...`;
+    this.render();
+
+    try {
+      await execPromise(`npm install ${pkg.name}@${pkg.latestVersion}`);
+      this.lastAction = `✅ Updated ${pkg.name} to ${pkg.latestVersion}`;
+      await this.refresh();
+    } catch (error) {
+      this.lastAction = `❌ Failed to update ${pkg.name}: ${error.message}`;
+      this.render();
+    }
+  }
+
+  async viewChangelog(pkg) {
+    this.loading = true;
+    this.lastAction = `Loading changelog for ${pkg.name}...`;
+    this.render();
+
+    try {
+      const response = await axios.get(`https://api.github.com/repos/${pkg.repository}/releases`);
+      // Show changelog in a scrollable view
+      await this.showScrollableContent(
+        `Changelog for ${pkg.name}`,
+        response.data.map(release => (
+          `${this.theme.title(release.tag_name)}\n${release.body}\n`
+        )).join('\n')
+      );
+    } catch (error) {
+      this.lastAction = `❌ Failed to load changelog: ${error.message}`;
+      this.render();
+    }
+  }
+
+  async viewDependencies(pkg) {
+    this.loading = true;
+    this.lastAction = `Loading dependencies for ${pkg.name}...`;
+    this.render();
+
+    try {
+      const response = await axios.get(`https://registry.npmjs.org/${pkg.name}/${pkg.currentVersion}`);
+      const deps = response.data.dependencies || {};
+      await this.showScrollableContent(
+        `Dependencies for ${pkg.name}@${pkg.currentVersion}`,
+        Object.entries(deps)
+          .map(([name, version]) => `${name}: ${version}`)
+          .join('\n')
+      );
+    } catch (error) {
+      this.lastAction = `❌ Failed to load dependencies: ${error.message}`;
+      this.render();
+    }
+  }
+
+  async viewSecurity(pkg) {
+    if (!pkg.vulnCount) {
+      this.lastAction = '✅ No known vulnerabilities';
+      this.render();
+      return;
+    }
+
+    try {
+      const vulns = await this.getVulnerabilityDetails(pkg.name);
+      await this.showScrollableContent(
+        `Security Issues for ${pkg.name}`,
+        vulns.map(vuln => (
+          `${this.theme.error(vuln.severity.toUpperCase())}: ${vuln.title}\n` +
+          `${this.theme.dim(vuln.description)}\n\n` +
+          `Affected versions: ${vuln.vulnerable_versions}\n` +
+          `Patched versions: ${vuln.patched_versions}\n` +
+          `${this.theme.info('References:')}\n${vuln.references.join('\n')}\n`
+        )).join('\n---\n')
+      );
+    } catch (error) {
+      this.lastAction = `❌ Failed to load security info: ${error.message}`;
+      this.render();
+    }
+  }
+
+  async viewLicense(pkg) {
+    this.loading = true;
+    this.lastAction = `Loading license info for ${pkg.name}...`;
+    this.render();
+
+    try {
+      const response = await axios.get(`https://registry.npmjs.org/${pkg.name}/${pkg.currentVersion}`);
+      const license = response.data.license || 'Unknown';
+      const licenseText = await this.getLicenseText(pkg.name, license);
+      await this.showScrollableContent(
+        `License: ${license}`,
+        licenseText
+      );
+    } catch (error) {
+      this.lastAction = `❌ Failed to load license: ${error.message}`;
+      this.render();
+    }
+  }
+
+  async showScrollableContent(title, content) {
+    // Implementation for scrollable content view
+    // This could use a library like blessed for better terminal UI
+    console.clear();
+    console.log(this.modules.boxen(
+      `${this.theme.title(title)}\n\n${content}`,
+      {
+        padding: 1,
+        margin: 1,
+        borderStyle: 'round',
+        borderColor: this.theme.border
+      }
+    ));
+    console.log(this.theme.dim('\nPress q to go back'));
+    
+    // Wait for 'q' to be pressed
+    return new Promise(resolve => {
+      const onKeyPress = (key) => {
+        if (key === 'q') {
+          process.stdin.removeListener('data', onKeyPress);
+          resolve();
+          this.render();
+        }
+      };
+      process.stdin.on('data', onKeyPress);
+    });
   }
 }
 
