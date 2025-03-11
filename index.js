@@ -27,6 +27,10 @@ const registryCache = new NodeCache({
   checkperiod: 120
 });
 
+// Add these variables at the top of the file
+let cacheHits = 0;
+let cacheMisses = 0;
+
 // Ensure policies directory exists
 if (!fsSync.existsSync('policies')) {
   fsSync.mkdirSync('policies');
@@ -117,9 +121,11 @@ async function getPackageInfo(packageName) {
   const cacheKey = `pkg:${packageName}`;
   const cached = registryCache.get(cacheKey);
   if (cached) {
+    cacheHits++;
     return cached;
   }
 
+  cacheMisses++;
   try {
     const response = await axios.get(`https://registry.npmjs.org/${packageName}`);
     const latestVersion = response.data['dist-tags'].latest;
@@ -227,10 +233,13 @@ async function scanDependencies(dependencies, type = 'dependencies', allowedLice
     const total = Object.keys(dependencies).length;
     progressBar.start(total, 0);
     
-    const promises = Object.entries(dependencies).map(([name, version]) => 
+    const packageNames = Object.keys(dependencies);
+    const batchResults = await getBatchPackageInfo(packageNames);
+
+    const promises = packageNames.map((name, index) => 
       limit(async () => {
-        const { latestVersion, license, versions } = await getPackageInfo(name);
-        const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(version, latestVersion, versions);
+        const { latestVersion, license, versions } = batchResults[name];
+        const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(dependencies[name], latestVersion, versions);
         const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
         const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
         
@@ -239,7 +248,7 @@ async function scanDependencies(dependencies, type = 'dependencies', allowedLice
         return {
           name,
           type,
-          currentVersion: version,
+          currentVersion: dependencies[name],
           latestVersion: latestVersion || 'Unknown',
           suggestedUpdate,
           license,
@@ -500,7 +509,7 @@ class ReportManager {
     try {
       const history = JSON.parse(await fs.readFile(this.historyFile, 'utf8'));
       history.scans.push({
-        timestamp: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
         results: results
       });
       await fs.writeFile(this.historyFile, JSON.stringify(history, null, 2));
@@ -608,7 +617,7 @@ class ReportManager {
       section += `- Trend: ${trends.licenseTrend}\n`;
 
       return section;
-    } catch (error) {
+  } catch (error) {
       return '### Historical Trends\nNo historical data available.';
     }
   }
@@ -623,7 +632,7 @@ class ReportManager {
     const licenseCompliance = scans.map(s =>
       (s.results.filter(r => r.licenseStatus === 'COMPLIANT').length / s.results.length) * 100
     );
-
+    
     return {
       averageDepCount: depCounts.reduce((a, b) => a + b) / depCounts.length,
       depCountTrend: this.calculateTrend(depCounts),
@@ -1254,6 +1263,9 @@ Generated on: ${new Date().toISOString()}
 }
 
 async function performFullScan(config = {}) {
+  const startTime = process.hrtime();
+  const initialMemoryUsage = process.memoryUsage().heapUsed;
+
   // Ensure config has required properties with defaults
   const defaultConfig = {
     path: '.',
@@ -1292,6 +1304,14 @@ async function performFullScan(config = {}) {
     );
     results = results.concat(devDependencyResults);
   }
+
+  const endTime = process.hrtime(startTime);
+  const duration = (endTime[0] * 1e9 + endTime[1]) / 1e6; // Convert to milliseconds
+  const finalMemoryUsage = process.memoryUsage().heapUsed;
+
+  console.log(`Scan Duration: ${duration.toFixed(2)} ms`);
+  console.log(`Memory Usage: ${((finalMemoryUsage - initialMemoryUsage) / 1024).toFixed(2)} KB`);
+  console.log(`Cache Hits: ${cacheHits}, Cache Misses: ${cacheMisses}`);
 
   return results;
 }
@@ -1815,3 +1835,42 @@ async function getPackageStats(packageName) {
     return null;
   }
 }
+
+// Add a method for batch API requests
+async function getBatchPackageInfo(packageNames) {
+  const results = await Promise.all(packageNames.map(name => getPackageInfo(name)));
+  return results;
+}
+
+// Add a progress estimation feature
+function displayProgress(current, total) {
+  const percentage = ((current / total) * 100).toFixed(2);
+  process.stdout.write(`\rProgress: ${percentage}% (${current}/${total})`);
+}
+
+// Update the scanning logic to display progress
+const promises = Object.entries(dependencies).map(([name, version], index) => 
+  limit(async () => {
+    const { latestVersion, license, versions } = await getPackageInfo(name);
+    displayProgress(index + 1, total); // Update progress
+    const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(version, latestVersion, versions);
+    const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
+    const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
+    
+    return {
+      name,
+      type,
+      currentVersion: version,
+      latestVersion: latestVersion || 'Unknown',
+      suggestedUpdate,
+      license,
+      versionStatus,
+      licenseStatus,
+      vulnLevel,
+      vulnCount
+    };
+  })
+);
+
+// At the end of the scan, clear the progress line
+console.log('\nScan complete.');
