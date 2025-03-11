@@ -1,14 +1,15 @@
-dependency-check:
-  image: node:18
+dependency-scan:
+  image: node:20
   stage: test
   script:
-    - npm install -g dependency-guardian
-    - dependency-guardian scan --include-dev --format json --output dependency-report.json
-  artifacts:
-    reports:
-      json: dependency-report.json
+    - npm ci
+    - npx dependency-guardian ci
   rules:
     - changes:
-        - package.json
-        - package-lock.json
-        - yarn.lock 
+      - package.json
+      - package-lock.json
+      - yarn.lock
+    - schedule: "0 0 * * 1"  # Weekly on Monday
+  artifacts:
+    reports:
+      junit: dependency-report.xml 

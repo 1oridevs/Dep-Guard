@@ -1,4 +1,4 @@
-name: Dependency Guardian Check
+name: Dependency Guardian
 
 on:
   push:
@@ -12,30 +12,38 @@ on:
       - 'package-lock.json'
       - 'yarn.lock'
   schedule:
-    - cron: '0 0 * * 1'
+    - cron: '0 0 * * 1' # Weekly on Monday
+  workflow_dispatch: # Manual trigger
 
 jobs:
-  check-dependencies:
+  scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          cache: 'npm'
+      - uses: actions/checkout@v4
       
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
       - name: Install dependencies
         run: npm ci
-      
-      - name: Install Dependency Guardian
-        run: npm install -g dependency-guardian
-      
-      - name: Run Dependency Check
-        run: dependency-guardian scan --include-dev --format json --output dependency-report.json
-        continue-on-error: true
-      
-      - name: Upload Scan Results
-        uses: actions/upload-artifact@v3
+        
+      - name: Run Dependency Guardian
+        id: depguard
+        run: npx dependency-guardian ci
+        
+      - name: Create GitHub Issue (if issues found)
+        if: ${{ failure() && steps.depguard.outputs.hasIssues }}
+        uses: actions/github-script@v7
         with:
-          name: dependency-scan-results
-          path: dependency-report.json 
+          script: |
+            const issues = JSON.parse(process.env.DEPGUARD_ISSUES);
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🛡️ Dependency Guardian: Issues Found',
+              body: issues.map(i => `- ${i.type}: ${i.message}`).join('\n'),
+              labels: ['dependencies', 'security']
+            }); 

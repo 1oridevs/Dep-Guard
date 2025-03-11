@@ -1,0 +1,21 @@
+{
+  "allowedLicenses": [
+    "MIT",
+    "ISC",
+    "Apache-2.0",
+    "BSD-3-Clause"
+  ],
+  "maxVulnerability": "moderate",
+  "updateLevel": "minor",
+  "checks": {
+    "security": true,
+    "license": true,
+    "updates": true
+  },
+  "ignorePackages": [],
+  "ci": {
+    "failOnIssues": true,
+    "reportFormat": "junit",
+    "createIssues": true
+  }
+} 

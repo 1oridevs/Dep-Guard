@@ -1,0 +1,40 @@
+<testsuites>
+  <testsuite name="DependencyGuardian" tests="18" failures="0" time="0">
+    <testcase name="axios" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="boxen" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="chalk" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="clear" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="cli-progress" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="commander" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="cosmiconfig" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="dependency-tree" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="figlet" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="glob" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="inquirer" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="js-yaml" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="madge" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="node-cache" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="ora" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="p-limit" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="semver" classname="DependencyGuardian" time="0">
+    </testcase>
+    <testcase name="xml" classname="DependencyGuardian" time="0">
+    </testcase>
+  </testsuite>
+</testsuites>

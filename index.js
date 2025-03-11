@@ -21,6 +21,8 @@ const cliProgress = require('cli-progress');
 const pLimit = require('p-limit');
 const NodeCache = require('node-cache');
 const inquirer = require('inquirer');
+const xml = require('xml');
+const { promises: fsPromises } = require('fs');
 
 const registryCache = new NodeCache({ 
   stdTTL: 3600,
@@ -972,35 +974,13 @@ program
 
 program
   .command('ci')
-  .description('CI/CD integration utilities')
-  .option('--init <type>', 'Initialize CI integration (github, gitlab, jenkins)', 'github')
-  .option('--hooks', 'Install git hooks')
-  .option('--check-only', 'Exit with error code on issues')
+  .description('Run in CI mode')
+  .option('--report <format>', 'Report format (junit, json)', 'junit')
   .action(async (options) => {
     try {
-      if (options.init) {
-        await initializeCIIntegration(options.init);
-      }
-      
-      if (options.hooks) {
-        await installGitHooks();
-      }
-      
-      if (options.checkOnly) {
-        const { hasIssues, results, error } = await runCICheck();
-        if (error) {
-          console.error(chalk.red(`CI check failed: ${error}`));
-          process.exit(1);
-        }
-        if (hasIssues) {
-          console.error(chalk.red('Issues found during CI check'));
-          displayResults(results);
-          process.exit(1);
-        }
-        console.log(chalk.green('CI check passed'));
-      }
+      await runCICheck();
     } catch (error) {
-      console.error(chalk.red(`\nError: ${error.message}`));
+      console.error(chalk.red('CI check failed:', error.message));
       process.exit(1);
     }
   });
@@ -2026,53 +2006,114 @@ async function installGitHooks() {
 }
 
 async function runCICheck() {
-  const defaultConfig = {
-    path: '.',
-    includeDev: true,
-    allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
-    output: {
-      debug: false
-    },
-    rules: {
-      dependencies: {},
-      devDependencies: {}
-    }
-  };
+  const spinner = ora('Running CI checks...').start();
   
-  let config;
   try {
-    const loadedConfig = await loadConfig();
-    config = deepMerge(defaultConfig, loadedConfig || {});
-  } catch (error) {
-    console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
-    config = defaultConfig;
-  }
+    const config = await loadConfig();
+    const results = await performFullScan({
+      includeDev: true,
+      allowedLicenses: config.allowedLicenses
+    });
+    
+    const issues = results.filter(r => {
+      // Check for security issues
+      if (config.checks.security && r.vulnCount > 0) {
+        return true;
+      }
+      
+      // Check for license issues
+      if (config.checks.license && r.licenseStatus === 'NON-COMPLIANT') {
+        return true;
+      }
+      
+      // Check for major version updates
+      if (config.checks.updates && r.versionStatus === 'major') {
+        return true;
+      }
+      
+      return false;
+    }).map(r => ({
+      type: r.vulnCount > 0 ? 'Security' : 
+            r.licenseStatus === 'NON-COMPLIANT' ? 'License' : 'Version',
+      package: r.name,
+      message: r.vulnCount > 0 ? `${r.vulnCount} ${r.vulnLevel} vulnerabilities found` :
+               r.licenseStatus === 'NON-COMPLIANT' ? `Non-compliant license: ${r.license}` :
+               `Major update available: ${r.currentVersion} → ${r.latestVersion}`
+    }));
 
-  try {
-    const results = await performFullScan(config);
-    
-    const hasHighSeverity = results.some(r => 
-      ['HIGH', 'CRITICAL'].includes(r.vulnLevel)
-    );
-    
-    const hasForbiddenLicense = results.some(r => 
-      r.licenseStatus === 'NON-COMPLIANT'
-    );
-    
-    return {
-      hasIssues: hasHighSeverity || hasForbiddenLicense,
-      results,
-      config
-    };
+    // Generate reports
+    if (config.ci.reportFormat === 'junit') {
+      await generateJUnitReport(results);
+      spinner.succeed('Generated JUnit report: dependency-report.xml');
+    }
+
+    // Set GitHub Actions outputs
+    if (process.env.GITHUB_ACTIONS) {
+      console.log(`::set-output name=hasIssues::${issues.length > 0}`);
+      console.log(`::set-output name=issueCount::${issues.length}`);
+      process.env.DEPGUARD_ISSUES = JSON.stringify(issues);
+    }
+
+    // Handle issues based on configuration
+    if (issues.length > 0) {
+      spinner.fail(`Found ${issues.length} issues`);
+      
+      // Display issues
+      issues.forEach(issue => {
+        console.error(chalk.red(`\n${issue.type} issue in ${issue.package}:`));
+        console.error(chalk.dim(issue.message));
+      });
+
+      // Exit with error if configured
+      if (config.ci.failOnIssues) {
+        process.exit(1);
+      }
+    } else {
+      spinner.succeed('All dependency checks passed');
+    }
   } catch (error) {
-    console.error(chalk.red('Error during CI check:', error.message));
-    return {
-      hasIssues: true,
-      results: [],
-      error: error.message,
-      config
-    };
+    spinner.fail('CI check failed');
+    console.error(chalk.red('\nError:', error.message));
+    process.exit(1);
   }
+}
+
+async function generateJUnitReport(results) {
+  const testcases = results.map(dep => ({
+    testcase: [
+      { _attr: { 
+        name: dep.name,
+        classname: 'DependencyGuardian',
+        time: '0'
+      }},
+      ...(dep.vulnCount > 0 ? [{
+        failure: {
+          _attr: { message: `${dep.vulnCount} ${dep.vulnLevel} vulnerabilities found` }
+        }
+      }] : []),
+      ...(dep.licenseStatus === 'NON-COMPLIANT' ? [{
+        failure: {
+          _attr: { message: `Non-compliant license: ${dep.license}` }
+        }
+      }] : [])
+    ]
+  }));
+
+  const xmlReport = {
+    testsuites: [{
+      testsuite: [
+        { _attr: { 
+          name: 'DependencyGuardian',
+          tests: results.length,
+          failures: results.filter(r => r.vulnCount > 0 || r.licenseStatus === 'NON-COMPLIANT').length,
+          time: '0'
+        }},
+        ...testcases
+      ]
+    }]
+  };
+
+  await fsPromises.writeFile('dependency-report.xml', xml(xmlReport, { indent: '  ' }));
 }
 
 function filterDependencies(results, filters) {
@@ -2633,3 +2674,37 @@ program
   .option('--verbose', 'Detailed output')
   .option('--save-preset <name>', 'Save current filters as preset')
   .option('--load-preset <name>', 'Load saved filter preset');
+
+// Add these configuration functions
+async function loadConfig() {
+  try {
+    const explorer = cosmiconfig('depguard');
+    const result = await explorer.search();
+    
+    const defaultConfig = {
+      allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
+      maxVulnerability: 'moderate',
+      updateLevel: 'minor',
+      checks: {
+        security: true,
+        license: true,
+        updates: true
+      },
+      ignorePackages: [],
+      ci: {
+        failOnIssues: true,
+        reportFormat: 'junit',
+        createIssues: true
+      }
+    };
+
+    if (!result || !result.config) {
+      return defaultConfig;
+    }
+
+    return deepMerge(defaultConfig, result.config);
+  } catch (error) {
+    console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
+    return defaultConfig;
+  }
+}
