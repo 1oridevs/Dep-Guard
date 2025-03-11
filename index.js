@@ -1847,30 +1847,3 @@ function displayProgress(current, total) {
   const percentage = ((current / total) * 100).toFixed(2);
   process.stdout.write(`\rProgress: ${percentage}% (${current}/${total})`);
 }
-
-// Update the scanning logic to display progress
-const promises = Object.entries(dependencies).map(([name, version], index) => 
-  limit(async () => {
-    const { latestVersion, license, versions } = await getPackageInfo(name);
-    displayProgress(index + 1, total); // Update progress
-    const { type: versionStatus, suggestedUpdate } = analyzeVersionChange(version, latestVersion, versions);
-    const licenseStatus = checkLicenseCompliance(license, allowedLicenses);
-    const { level: vulnLevel, count: vulnCount } = getSeverityLevel(vulnerabilities[name]);
-    
-    return {
-      name,
-      type,
-      currentVersion: version,
-      latestVersion: latestVersion || 'Unknown',
-      suggestedUpdate,
-      license,
-      versionStatus,
-      licenseStatus,
-      vulnLevel,
-      vulnCount
-    };
-  })
-);
-
-// At the end of the scan, clear the progress line
-console.log('\nScan complete.');
