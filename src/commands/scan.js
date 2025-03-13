@@ -1,127 +1,91 @@
 const ora = require('ora');
 const chalk = require('chalk');
+const dependencyScanner = require('../core/dependency-scanner');
+const policyChecker = require('../core/policy-checker');
 const logger = require('../utils/logger');
 const { convertToCSV, convertToHTML } = require('../utils/formatters');
-const dependencyScanner = require('../core/dependency-scanner');
 
-async function scanCommand(options) {
-  const spinner = ora('Scanning dependencies...').start();
-  
-  try {
-    const projectPath = process.cwd();
-    logger.debug('Project path:', projectPath);
+async function scanCommand(program, config) {
+  program
+    .command('scan')
+    .description('Scan project dependencies for issues')
+    .option('-f, --format <type>', 'Output format (table, json, csv, html)', 'table')
+    .option('-p, --policy <path>', 'Path to custom policy file')
+    .action(async (options) => {
+      const spinner = ora('Scanning dependencies...').start();
+      
+      try {
+        // Load policy
+        const policy = await policyChecker.loadPolicy(options.policy);
+        
+        // Read package.json
+        const packageJson = await dependencyScanner.readPackageJson(process.cwd());
+        const dependencies = packageJson.dependencies || {};
+        
+        // Scan dependencies
+        const results = await dependencyScanner.scanDependencies(dependencies);
+        
+        // Check each dependency against policy
+        const issues = [];
+        for (const dep of results) {
+          const policyIssues = await policyChecker.checkDependency(dep, policy);
+          if (policyIssues.length > 0) {
+            issues.push(...policyIssues);
+          }
+        }
 
-    // Read package.json
-    const packageJson = await dependencyScanner.readPackageJson(projectPath);
-    logger.debug('Package.json found:', packageJson.name);
+        spinner.stop();
 
-    const dependencies = packageJson.dependencies || {};
-    const depsCount = Object.keys(dependencies).length;
-    logger.debug('Dependencies found:', depsCount);
-    
-    if (depsCount === 0) {
-      spinner.info('No dependencies found in package.json');
-      return;
-    }
+        // Format and display results
+        outputResults(results, issues, options.format);
 
-    // Perform the scan
-    const results = await dependencyScanner.scanDependencies(dependencies);
-    spinner.stop();
+        // Exit with error if critical issues found
+        if (issues.some(i => i.level === 'high')) {
+          process.exit(1);
+        }
 
-    // Display results
-    if (results.length === 0) {
-      logger.success('\n✅ All dependencies are up to date!');
-      return;
-    }
-
-    // Group results by update type
-    const grouped = results.reduce((acc, result) => {
-      const type = result.updateType || 'unknown';
-      if (!acc[type]) acc[type] = [];
-      acc[type].push(result);
-      return acc;
-    }, {});
-
-    // Output based on format
-    switch (options.format.toLowerCase()) {
-      case 'json':
-        console.log(JSON.stringify(results, null, 2));
-        break;
-      case 'csv':
-        console.log(convertToCSV(results));
-        break;
-      case 'html':
-        console.log(convertToHTML(results));
-        break;
-      default:
-        displayPrettyScanResults(grouped, depsCount, results.length);
-    }
-
-    spinner.succeed('Scan complete! 🎉');
-
-  } catch (error) {
-    logger.debug('Scan failed with error:', error);
-    spinner.fail(chalk.red(`Scan failed: ${error.message}`));
-    process.exit(1);
-  }
+      } catch (error) {
+        spinner.fail(chalk.red(`Scan failed: ${error.message}`));
+        logger.debug('Error details:', error);
+        process.exit(1);
+      }
+    });
 }
 
-function displayPrettyScanResults(grouped, totalDeps, updateCount) {
-  console.log('\n📦 Dependency Scan Results');
-  console.log('=======================\n');
+function outputResults(results, issues, format) {
+  const formattedResults = results.map(dep => ({
+    name: dep.name,
+    currentVersion: dep.version,
+    latestVersion: dep.latestVersion || 'unknown',
+    updateType: dep.updateType || 'unknown',
+    status: issues.some(i => i.level === 'high' && i.name === dep.name) ? 'blocked' : 'ok'
+  }));
 
-  if (grouped.major?.length) {
-    console.log(chalk.red('🔴 Major Updates Required:'));
-    grouped.major.forEach(displayDependency);
-    console.log('');
+  switch (format.toLowerCase()) {
+    case 'json':
+      console.log(JSON.stringify({ results: formattedResults, issues }, null, 2));
+      break;
+
+    case 'csv':
+      console.log(convertToCSV(formattedResults));
+      break;
+
+    case 'html':
+      console.log(convertToHTML(formattedResults));
+      break;
+
+    default: // table
+      console.log('\nDependency Scan Results:');
+      console.table(formattedResults);
+      
+      if (issues.length > 0) {
+        console.log('\nIssues Found:');
+        issues.forEach(issue => {
+          const color = issue.level === 'high' ? 'red' : 'yellow';
+          console.log(chalk[color](`- [${issue.type}] ${issue.message}`));
+        });
+      }
   }
-
-  if (grouped.minor?.length) {
-    console.log(chalk.yellow('🟡 Minor Updates Available:'));
-    grouped.minor.forEach(displayDependency);
-    console.log('');
-  }
-
-  if (grouped.patch?.length) {
-    console.log(chalk.blue('🔵 Patch Updates Available:'));
-    grouped.patch.forEach(displayDependency);
-    console.log('');
-  }
-
-  displaySummary(grouped, totalDeps, updateCount);
-}
-
-function displayDependency(dep) {
-  console.log(chalk.dim('─────────────────────────'));
-  console.log(chalk.bold(dep.name));
-  console.log(chalk.dim(`Current: ${dep.currentVersion}`));
-  console.log(chalk.green(`Latest:  ${dep.latestVersion}`));
-  console.log(chalk.dim(`Status:  ${getStatusText(dep.updateType)}`));
-}
-
-function getStatusText(updateType) {
-  switch (updateType) {
-    case 'major':
-      return 'Breaking changes (major update)';
-    case 'minor':
-      return 'New features available';
-    case 'patch':
-      return 'Bug fixes available';
-    default:
-      return 'Update available';
-  }
-}
-
-function displaySummary(grouped, totalDeps, updateCount) {
-  console.log(chalk.dim('─────────────────────────'));
-  console.log('\n📊 Summary:');
-  console.log(chalk.dim('──────────'));
-  if (grouped.major) console.log(chalk.red(`Major updates: ${grouped.major.length}`));
-  if (grouped.minor) console.log(chalk.yellow(`Minor updates: ${grouped.minor.length}`));
-  if (grouped.patch) console.log(chalk.blue(`Patch updates: ${grouped.patch.length}`));
-  console.log(chalk.dim(`\nTotal packages checked: ${totalDeps}`));
-  console.log(chalk.dim(`Updates needed: ${updateCount}`));
-  console.log('\n');
 }
 
 module.exports = scanCommand; 

@@ -1,29 +1,42 @@
 class Dependency {
   constructor(name, version, type = 'dependencies') {
     this.name = name;
-    this.currentVersion = version;
+    this.version = version;
     this.type = type;
     this.latestVersion = null;
-    this.suggestedUpdate = null;
+    this.updateType = null;
     this.license = null;
-    this.versionStatus = null;
-    this.licenseStatus = null;
-    this.vulnLevel = 'NONE';
-    this.vulnCount = 0;
+    this.vulnerabilities = [];
+    this.issues = [];
+  }
+
+  addIssue(type, level, message) {
+    this.issues.push({
+      type,
+      level,
+      message,
+      dependency: this.name
+    });
+  }
+
+  hasIssues() {
+    return this.issues.length > 0;
+  }
+
+  hasCriticalIssues() {
+    return this.issues.some(issue => issue.level === 'high');
   }
 
   toJSON() {
     return {
       name: this.name,
+      version: this.version,
       type: this.type,
-      currentVersion: this.currentVersion,
       latestVersion: this.latestVersion,
-      suggestedUpdate: this.suggestedUpdate,
+      updateType: this.updateType,
       license: this.license,
-      versionStatus: this.versionStatus,
-      licenseStatus: this.licenseStatus,
-      vulnLevel: this.vulnLevel,
-      vulnCount: this.vulnCount
+      vulnerabilities: this.vulnerabilities,
+      issues: this.issues
     };
   }
 }

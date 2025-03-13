@@ -1,35 +1,29 @@
 #!/usr/bin/env node
 
 const { program } = require('commander');
+const commands = require('./commands');
 const logger = require('./utils/logger');
 const { loadConfig } = require('./utils/config');
-const commands = require('./commands');
 
-// Set up CLI
-program
-  .name('dependency-guardian')
-  .description('A powerful dependency management and analysis tool')
-  .version(require('../package.json').version);
+async function main() {
+  try {
+    // Load configuration
+    const config = await loadConfig();
 
-// Load configuration
-let config;
-try {
-  config = loadConfig();
-  logger.debug('Configuration loaded:', config);
-} catch (error) {
-  logger.warn('Failed to load configuration:', error.message);
-  config = {};
+    // Set up debug mode if needed
+    if (process.env.DEBUG || config.debug) {
+      logger.setDebug(true);
+    }
+
+    // Register commands
+    commands.forEach(cmd => cmd(program, config));
+
+    // Parse command line arguments
+    await program.parseAsync(process.argv);
+  } catch (error) {
+    logger.error('Failed to start:', error);
+    process.exit(1);
+  }
 }
 
-// Register commands
-Object.entries(commands).forEach(([name, command]) => {
-  command(program, config);
-});
-
-// Parse arguments
-program.parse(process.argv);
-
-// Show help if no command provided
-if (!process.argv.slice(2).length) {
-  program.outputHelp();
-} 
+module.exports = main; 
