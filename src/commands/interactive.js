@@ -1,9 +1,9 @@
 const inquirer = require('inquirer');
 const ora = require('ora');
 const chalk = require('chalk');
+const dependencyScanner = require('../core/analyzers/dependency-scanner');
+const securityChecker = require('../core/checkers/security-checker');
 const logger = require('../utils/logger');
-const dependencyScanner = require('../core/dependency-scanner');
-const securityChecker = require('../core/security-checker');
 
 async function interactiveCommand(program, config) {
   program
@@ -21,30 +21,69 @@ async function interactiveCommand(program, config) {
           value: { name, version }
         }));
 
-        const { dep } = await inquirer.prompt([
-          {
-            type: 'list',
-            name: 'dep',
-            message: 'Select a dependency to manage:',
-            choices
-          }
-        ]);
+        const mainMenu = async () => {
+          const { action } = await inquirer.prompt([
+            {
+              type: 'list',
+              name: 'action',
+              message: 'What would you like to do?',
+              choices: [
+                { name: 'Scan all dependencies', value: 'scan' },
+                { name: 'Check specific dependency', value: 'check' },
+                { name: 'View security audit', value: 'security' },
+                { name: 'View dependency details', value: 'details' },
+                { name: 'Remove dependency', value: 'remove' },
+                { name: 'Exit', value: 'exit' }
+              ]
+            }
+          ]);
 
-        const { action } = await inquirer.prompt([
-          {
-            type: 'list',
-            name: 'action',
-            message: `What would you like to do with ${dep.name}?`,
-            choices: [
-              { name: 'Check for updates', value: 'update' },
-              { name: 'Run security audit', value: 'security' },
-              { name: 'View details', value: 'details' },
-              { name: 'Remove dependency', value: 'remove' }
-            ]
-          }
-        ]);
+          await handleAction(action);
+        };
 
-        await handleAction(action, dep);
+        const handleAction = async (action) => {
+          const spinner = ora();
+
+          switch (action) {
+            case 'scan':
+              spinner.start('Scanning dependencies...');
+              const results = await dependencyScanner.scanDependencies(dependencies);
+              spinner.stop();
+              displayScanResults(results);
+              break;
+
+            case 'security':
+              spinner.start('Running security audit...');
+              const vulns = await securityChecker.runSecurityAudit(process.cwd());
+              spinner.stop();
+              
+              if (vulns.vulnerabilities.length > 0) {
+                console.log(chalk.red('\nVulnerabilities found:'));
+                vulns.vulnerabilities.forEach(v => {
+                  console.log(`- ${v.title} (${v.severity})`);
+                });
+              } else {
+                console.log(chalk.green('\nNo vulnerabilities found'));
+              }
+              break;
+
+            case 'exit':
+              console.log('Goodbye! 👋');
+              process.exit(0);
+              break;
+
+            default:
+              console.log('Feature not implemented yet');
+          }
+
+          if (action !== 'exit') {
+            await mainMenu();
+          }
+        };
+
+        // Start the interactive session
+        console.log(chalk.blue('\n🛡️  Dependency Guardian Interactive Mode\n'));
+        await mainMenu();
 
       } catch (error) {
         logger.error('Interactive mode failed:', error);
@@ -53,42 +92,19 @@ async function interactiveCommand(program, config) {
     });
 }
 
-async function handleAction(action, dep) {
-  const spinner = ora('Processing...').start();
-
-  try {
-    switch (action) {
-      case 'update':
-        const latest = await dependencyScanner.getLatestVersion(dep.name);
-        spinner.stop();
-        console.log(`\nCurrent version: ${chalk.yellow(dep.version)}`);
-        console.log(`Latest version: ${chalk.green(latest)}`);
-        break;
-
-      case 'security':
-        const vulns = await securityChecker.checkVulnerabilityDatabase(dep.name, dep.version);
-        spinner.stop();
-        if (vulns?.vulnerabilities?.length) {
-          console.log(chalk.red('\nVulnerabilities found:'));
-          vulns.vulnerabilities.forEach(v => {
-            console.log(`- ${v.title} (${v.severity})`);
-          });
-        } else {
-          console.log(chalk.green('\nNo vulnerabilities found'));
-        }
-        break;
-
-      case 'details':
-        // Implementation for viewing details
-        break;
-
-      case 'remove':
-        // Implementation for removing dependency
-        break;
+function displayScanResults(results) {
+  console.log('\nScan Results:');
+  results.forEach(dep => {
+    const hasIssues = dep.issues.length > 0;
+    const color = hasIssues ? 'yellow' : 'green';
+    console.log(chalk[color](`\n${dep.name} (${dep.version})`));
+    
+    if (hasIssues) {
+      dep.issues.forEach(issue => {
+        console.log(chalk.dim(`  - ${issue.message}`));
+      });
     }
-  } catch (error) {
-    spinner.fail(`Action failed: ${error.message}`);
-  }
+  });
 }
 
 module.exports = interactiveCommand; 

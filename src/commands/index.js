@@ -1,11 +1,11 @@
-const scanCommand = require('./scan');
 const analyzeCommand = require('./analyze');
+const scanCommand = require('./scan');
 const ciCommand = require('./ci');
 const interactiveCommand = require('./interactive');
 
 module.exports = [
-  scanCommand,
   analyzeCommand,
+  scanCommand,
   ciCommand,
   interactiveCommand
 ]; 

@@ -1,7 +1,8 @@
 const ora = require('ora');
 const chalk = require('chalk');
-const dependencyScanner = require('../core/dependency-scanner');
-const policyChecker = require('../core/policy-checker');
+const dependencyScanner = require('../core/analyzers/dependency-scanner');
+const securityChecker = require('../core/checkers/security-checker');
+const policyChecker = require('../core/checkers/policy-checker');
 const logger = require('../utils/logger');
 const { convertToCSV, convertToHTML } = require('../utils/formatters');
 
@@ -22,27 +23,33 @@ async function scanCommand(program, config) {
         const packageJson = await dependencyScanner.readPackageJson(process.cwd());
         const dependencies = packageJson.dependencies || {};
         
+        if (Object.keys(dependencies).length === 0) {
+          spinner.info('No dependencies found');
+          return;
+        }
+
+        // Run security audit
+        spinner.text = 'Running security audit...';
+        const securityResults = await securityChecker.runSecurityAudit(process.cwd());
+
         // Scan dependencies
+        spinner.text = 'Analyzing dependencies...';
         const results = await dependencyScanner.scanDependencies(dependencies);
-        
-        // Check each dependency against policy
-        const issues = [];
-        for (const dep of results) {
-          const policyIssues = await policyChecker.checkDependency(dep, policy);
-          if (policyIssues.length > 0) {
-            issues.push(...policyIssues);
-          }
-        }
 
-        spinner.stop();
+        // Format results
+        const formattedResults = results.map(dep => ({
+          name: dep.name,
+          currentVersion: dep.version,
+          latestVersion: dep.latestVersion,
+          updateType: dep.updateType,
+          securityIssues: securityResults.vulnerabilities.filter(v => v.package === dep.name).length,
+          license: dep.license
+        }));
 
-        // Format and display results
-        outputResults(results, issues, options.format);
+        spinner.succeed('Scan complete! 🎉');
 
-        // Exit with error if critical issues found
-        if (issues.some(i => i.level === 'high')) {
-          process.exit(1);
-        }
+        // Output results based on format
+        outputResults(options.format, formattedResults, securityResults.vulnerabilities);
 
       } catch (error) {
         spinner.fail(chalk.red(`Scan failed: ${error.message}`));
@@ -52,37 +59,29 @@ async function scanCommand(program, config) {
     });
 }
 
-function outputResults(results, issues, format) {
-  const formattedResults = results.map(dep => ({
-    name: dep.name,
-    currentVersion: dep.version,
-    latestVersion: dep.latestVersion || 'unknown',
-    updateType: dep.updateType || 'unknown',
-    status: issues.some(i => i.level === 'high' && i.name === dep.name) ? 'blocked' : 'ok'
-  }));
-
+function outputResults(format, results, issues) {
   switch (format.toLowerCase()) {
     case 'json':
-      console.log(JSON.stringify({ results: formattedResults, issues }, null, 2));
+      console.log(JSON.stringify({ results, issues }, null, 2));
       break;
 
     case 'csv':
-      console.log(convertToCSV(formattedResults));
+      console.log(convertToCSV(results));
       break;
 
     case 'html':
-      console.log(convertToHTML(formattedResults));
+      console.log(convertToHTML(results));
       break;
 
     default: // table
       console.log('\nDependency Scan Results:');
-      console.table(formattedResults);
+      console.table(results);
       
       if (issues.length > 0) {
         console.log('\nIssues Found:');
         issues.forEach(issue => {
-          const color = issue.level === 'high' ? 'red' : 'yellow';
-          console.log(chalk[color](`- [${issue.type}] ${issue.message}`));
+          const color = issue.severity === 'high' ? 'red' : 'yellow';
+          console.log(chalk[color](`- [${issue.severity}] ${issue.title} in ${issue.package}`));
         });
       }
   }

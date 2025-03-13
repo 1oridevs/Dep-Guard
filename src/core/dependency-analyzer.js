@@ -1,134 +1,102 @@
-const madge = require('madge');
-const path = require('path');
+const dependencyScanner = require('./analyzers/dependency-scanner');
 const logger = require('../utils/logger');
-const cache = require('../utils/cache');
-const axios = require('axios');
+const semver = require('semver');
 
 class DependencyAnalyzer {
   constructor() {
-    this.cache = cache;
+    this.scanner = dependencyScanner;
   }
 
-  async analyzeDependencyTree(projectPath) {
+  async analyze(projectPath) {
     try {
-      const result = await madge(projectPath, {
-        baseDir: projectPath,
-        excludeRegExp: [/node_modules/],
-        fileExtensions: ['js', 'jsx', 'ts', 'tsx']
+      // Read package.json
+      const packageJson = await this.scanner.readPackageJson(projectPath);
+      
+      // Scan dependencies
+      const dependencies = {
+        ...(packageJson.dependencies || {}),
+        // Optionally include devDependencies if needed
+        // ...(packageJson.devDependencies || {})
+      };
+
+      const results = await this.scanner.scanDependencies(dependencies);
+      
+      // Process and categorize results
+      const analysis = {
+        summary: {
+          total: results.length,
+          issues: 0,
+          critical: 0,
+          updates: {
+            major: 0,
+            minor: 0,
+            patch: 0
+          }
+        },
+        dependencies: results.map(dep => ({
+          name: dep.name,
+          version: dep.version,
+          latestVersion: dep.latestVersion,
+          updateType: dep.updateType,
+          license: dep.license,
+          issues: this.validateDependency(dep)
+        }))
+      };
+
+      // Update summary counts
+      analysis.dependencies.forEach(dep => {
+        analysis.summary.issues += dep.issues.length;
+        analysis.summary.critical += dep.issues.filter(i => i.level === 'high').length;
+        if (dep.updateType && dep.updateType !== 'current') {
+          analysis.summary.updates[dep.updateType]++;
+        }
       });
 
-      return result.obj();
+      return analysis;
     } catch (error) {
-      logger.error('Failed to analyze dependency tree:', error);
-      throw new Error(`Dependency tree analysis failed: ${error.message}`);
+      logger.error('Analysis failed:', error);
+      throw error;
     }
   }
 
-  detectCircularDependencies(tree) {
-    try {
-      const circular = [];
-      const visited = new Set();
-      const path = [];
+  validateDependency(dep) {
+    const issues = [];
 
-      const dfs = (node) => {
-        if (path.includes(node)) {
-          const cycle = path.slice(path.indexOf(node));
-          circular.push(cycle.join(' -> ') + ' -> ' + node);
-          return;
-        }
-
-        if (visited.has(node)) return;
-        visited.add(node);
-        path.push(node);
-
-        const dependencies = tree[node] || [];
-        for (const dep of dependencies) {
-          dfs(dep);
-        }
-
-        path.pop();
-      };
-
-      for (const node of Object.keys(tree)) {
-        dfs(node);
-      }
-
-      return circular;
-    } catch (error) {
-      logger.error('Failed to detect circular dependencies:', error);
-      throw new Error(`Circular dependency detection failed: ${error.message}`);
-    }
-  }
-
-  async analyzeBundleSize(packageName, version) {
-    const cacheKey = `bundle-size-${packageName}@${version}`;
-    const cached = this.cache.get(cacheKey);
-    
-    if (cached) {
-      return cached;
+    // Check update type
+    if (dep.updateType === 'unknown') {
+      issues.push({
+        type: 'updates',
+        level: 'warning',
+        message: `Unable to determine update status for ${dep.name}`
+      });
+    } else if (dep.updateType !== 'current') {
+      const level = dep.updateType === 'major' ? 'high' : 'warning';
+      issues.push({
+        type: 'updates',
+        level,
+        message: `${dep.updateType} update available (${dep.version} → ${dep.latestVersion})`
+      });
     }
 
-    try {
-      const response = await axios.get(`https://bundlephobia.com/api/size?package=${packageName}@${version}`);
-      const data = {
-        size: response.data.size,
-        gzip: response.data.gzip,
-        dependencyCount: response.data.dependencyCount
-      };
-
-      this.cache.set(cacheKey, data);
-      return data;
-    } catch (error) {
-      logger.debug(`Bundle size analysis failed for ${packageName}:`, error);
-      return null;
-    }
-  }
-
-  detectDuplicateDependencies(dependencies) {
-    const versions = {};
-    const duplicates = [];
-
-    for (const [name, version] of Object.entries(dependencies)) {
-      if (!versions[name]) {
-        versions[name] = [];
-      }
-      versions[name].push(version);
+    // Check license
+    if (!dep.license || dep.license === 'UNKNOWN') {
+      issues.push({
+        type: 'license',
+        level: 'warning',
+        message: `No license information found for ${dep.name}`
+      });
     }
 
-    for (const [name, versionList] of Object.entries(versions)) {
-      if (versionList.length > 1) {
-        duplicates.push({
-          name,
-          versions: versionList
-        });
-      }
+    // Check if version is valid
+    if (!semver.valid(semver.clean(dep.version))) {
+      issues.push({
+        type: 'version',
+        level: 'warning',
+        message: `Invalid version format: ${dep.version}`
+      });
     }
 
-    return duplicates;
-  }
-
-  async getPackageStats(packageName, version) {
-    const cacheKey = `package-stats-${packageName}@${version}`;
-    const cached = this.cache.get(cacheKey);
-    
-    if (cached) {
-      return cached;
-    }
-
-    try {
-      const response = await axios.get(`https://api.npmjs.org/downloads/point/last-month/${packageName}`);
-      const data = {
-        downloads: response.data.downloads,
-        version,
-        name: packageName
-      };
-
-      this.cache.set(cacheKey, data);
-      return data;
-    } catch (error) {
-      logger.debug(`Failed to get package stats for ${packageName}:`, error);
-      return null;
-    }
+    return issues;
   }
 }
 

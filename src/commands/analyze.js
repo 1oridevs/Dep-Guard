@@ -6,13 +6,14 @@ const policyChecker = require('../core/policy-checker');
 const licenseChecker = require('../core/license-checker');
 const logger = require('../utils/logger');
 const { analyzeDependencyTree, detectCircularDependencies } = require('../core/dependency-analyzer');
+const bundleAnalyzer = require('../core/bundle-analyzer');
 
 async function analyzeCommand(program, config) {
   program
     .command('analyze')
-    .description('Perform deep analysis of dependencies')
-    .option('-p, --policy <path>', 'Path to custom policy file')
-    .option('--json', 'Output in JSON format')
+    .description('Perform advanced analysis on dependencies')
+    .option('--ci', 'Run in CI mode (exits with error code on issues)')
+    .option('--json', 'Output results in JSON format')
     .action(async (options) => {
       const spinner = ora('Analyzing dependencies...').start();
       
