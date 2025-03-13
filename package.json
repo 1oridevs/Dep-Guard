@@ -2,9 +2,9 @@
   "name": "dependency-guardian",
   "version": "1.0.0",
   "description": "A powerful dependency management and analysis tool for Node.js projects",
-  "main": "index.js",
+  "main": "src/index.js",
   "bin": {
-    "dependency-guardian": "./index.js"
+    "dependency-guardian": "./src/index.js"
   },
   "scripts": {
     "test": "jest",
