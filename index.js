@@ -511,11 +511,35 @@ async function getLatestVersion(packageName) {
   }
 }
 
-program
-  .command('interactive')
-  .alias('i')
-  .description('Start interactive mode')
-  .action(async () => {
+// Add debug logging
+const DEBUG = process.env.DEBUG || false;
+const debugLog = (...args) => DEBUG && console.log(...args);
+
+// Define themes
+const themes = {
+  default: {
+    title: chalk.blue,
+    border: 'blue',
+    dim: chalk.dim
+  }
+  // ... other themes
+};
+
+let currentTheme = 'default';
+
+// Define the InteractiveMode class once
+class InteractiveMode {
+  constructor() {
+    this.theme = themes[currentTheme];
+    this.modules = {
+      boxen: require('boxen'),
+      clear: require('clear')
+    };
+    this.lastAction = '';
+    this.loading = false;
+  }
+
+  async start() {
     try {
       console.log(chalk.blue('\n📦 Dependency Guardian Interactive Mode'));
       console.log(chalk.dim('=====================================\n'));
@@ -528,7 +552,7 @@ program
       
       if (Object.keys(dependencies).length === 0) {
         spinner.info('No dependencies found in package.json');
-        process.exit(0);
+        return;
       }
 
       // Perform the scan
@@ -543,24 +567,35 @@ program
         return acc;
       }, {});
 
-      // Display interactive menu
-      const choices = [
-        new inquirer.Separator('=== Updates ==='),
-        ...(grouped.major?.length ? [{ name: `Major Updates (${grouped.major.length})`, value: 'major' }] : []),
-        ...(grouped.minor?.length ? [{ name: `Minor Updates (${grouped.minor.length})`, value: 'minor' }] : []),
-        ...(grouped.patch?.length ? [{ name: `Patch Updates (${grouped.patch.length})`, value: 'patch' }] : []),
-        new inquirer.Separator('=== Actions ==='),
-        { name: 'Scan Again', value: 'scan' },
-        { name: 'Exit', value: 'exit' }
-      ];
-
       while (true) {
+        this.modules.clear();
+        console.log(chalk.blue('\n📦 Dependency Guardian Interactive Mode'));
+        console.log(chalk.dim('=====================================\n'));
+
+        if (this.lastAction) {
+          console.log(this.lastAction + '\n');
+          this.lastAction = '';
+        }
+
+        // Display interactive menu
         const { action } = await inquirer.prompt([
           {
             type: 'list',
             name: 'action',
             message: 'What would you like to do?',
-            choices
+            choices: [
+              new inquirer.Separator('=== Updates ==='),
+              ...(grouped.major?.length ? [{ name: `Major Updates (${grouped.major.length})`, value: 'major' }] : []),
+              ...(grouped.minor?.length ? [{ name: `Minor Updates (${grouped.minor.length})`, value: 'minor' }] : []),
+              ...(grouped.patch?.length ? [{ name: `Patch Updates (${grouped.patch.length})`, value: 'patch' }] : []),
+              new inquirer.Separator('=== Analysis ==='),
+              { name: '📊 View Dependency Tree', value: 'tree' },
+              { name: '🔍 Analyze Bundle Sizes', value: 'bundle' },
+              { name: '🛡️ Security Audit', value: 'audit' },
+              new inquirer.Separator('=== Actions ==='),
+              { name: '🔄 Refresh', value: 'refresh' },
+              { name: '❌ Exit', value: 'exit' }
+            ]
           }
         ]);
 
@@ -569,8 +604,24 @@ program
           process.exit(0);
         }
 
-        if (action === 'scan') {
-          console.clear();
+        if (action === 'refresh') {
+          this.lastAction = 'Refreshing dependencies...';
+          // Reload everything
+          continue;
+        }
+
+        if (action === 'tree') {
+          await this.viewDependencyTree(projectPath);
+          continue;
+        }
+
+        if (action === 'bundle') {
+          await this.analyzeBundleSizes(dependencies);
+          continue;
+        }
+
+        if (action === 'audit') {
+          await this.runSecurityAudit(projectPath);
           continue;
         }
 
@@ -590,14 +641,155 @@ program
           ]);
 
           if (selected.length > 0) {
-            console.log(chalk.yellow('\nSelected updates:'));
-            selected.forEach(dep => {
-              console.log(chalk.dim(`- ${dep.name}: ${dep.currentVersion} → ${dep.latestVersion}`));
-            });
+            await this.applyUpdates(selected);
           }
         }
       }
+    } catch (error) {
+      console.error(chalk.red('Interactive mode failed:', error.message));
+      process.exit(1);
+    }
+  }
 
+  async viewDependencyTree(projectPath) {
+    this.loading = true;
+    this.lastAction = 'Analyzing dependency tree...';
+    
+    try {
+      const tree = await analyzeDependencyTree(projectPath);
+      const treeDisplay = this.formatDependencyTree(tree);
+      await this.showScrollableContent('Dependency Tree', treeDisplay);
+    } catch (error) {
+      this.lastAction = `❌ Failed to analyze dependency tree: ${error.message}`;
+    }
+  }
+
+  async analyzeBundleSizes(dependencies) {
+    this.loading = true;
+    this.lastAction = 'Analyzing bundle sizes...';
+    
+    try {
+      const results = [];
+      for (const [name, version] of Object.entries(dependencies)) {
+        const info = await analyzeBundleSize(name, version);
+        if (info) {
+          results.push({ name, version, ...info });
+        }
+      }
+
+      const content = results
+        .sort((a, b) => b.gzip - a.gzip)
+        .map(r => `${r.name}@${r.version}\n` +
+          `  Size: ${(r.size / 1024).toFixed(2)}KB\n` +
+          `  Gzipped: ${(r.gzip / 1024).toFixed(2)}KB\n` +
+          `  Dependencies: ${r.dependencyCount}\n`
+        ).join('\n');
+
+      await this.showScrollableContent('Bundle Sizes', content);
+    } catch (error) {
+      this.lastAction = `❌ Failed to analyze bundle sizes: ${error.message}`;
+    }
+  }
+
+  async runSecurityAudit(projectPath) {
+    this.loading = true;
+    this.lastAction = 'Running security audit...';
+    
+    try {
+      const { stdout } = await execPromise('npm audit --json');
+      const auditData = JSON.parse(stdout);
+      
+      const content = Object.values(auditData.advisories)
+        .map(vuln => (
+          `${chalk.red(vuln.severity.toUpperCase())}: ${vuln.title}\n` +
+          chalk.dim(vuln.description) + '\n\n' +
+          `Affected versions: ${vuln.vulnerable_versions}\n` +
+          `Patched versions: ${vuln.patched_versions}\n` +
+          chalk.blue('References:\n') + vuln.references.join('\n')
+        )).join('\n\n───────────────────\n\n');
+
+      await this.showScrollableContent('Security Audit', content);
+    } catch (error) {
+      this.lastAction = `❌ Failed to run security audit: ${error.message}`;
+    }
+  }
+
+  async applyUpdates(updates) {
+    this.loading = true;
+    this.lastAction = 'Applying updates...';
+    
+    try {
+      const packageJson = JSON.parse(await fs.readFile('package.json', 'utf8'));
+      
+      updates.forEach(update => {
+        packageJson.dependencies[update.name] = update.latestVersion;
+      });
+      
+      await fs.writeFile('package.json', JSON.stringify(packageJson, null, 2));
+      this.lastAction = `✅ Updated ${updates.length} packages. Run npm install to apply changes.`;
+    } catch (error) {
+      this.lastAction = `❌ Failed to apply updates: ${error.message}`;
+    }
+  }
+
+  formatDependencyTree(tree, prefix = '', isLast = true) {
+    const entries = Object.entries(tree);
+    return entries.map(([name, deps], index) => {
+      const isLastEntry = index === entries.length - 1;
+      const marker = isLastEntry ? '└── ' : '├── ';
+      const childPrefix = prefix + (isLastEntry ? '    ' : '│   ');
+      
+      const children = deps.length > 0
+        ? '\n' + deps.map((dep, i) => 
+            this.formatDependencyTree({ [dep]: [] }, childPrefix, i === deps.length - 1)
+          ).join('\n')
+        : '';
+
+      return prefix + marker + name + children;
+    }).join('\n');
+  }
+}
+
+// Add this class for report management
+class ReportManager {
+  constructor() {
+    this.historyFile = '.depguard/history.json';
+  }
+
+  async saveScanResults(results) {
+    await fs.mkdir(path.dirname(this.historyFile), { recursive: true });
+    const history = await this.loadHistory();
+    history.scans.push({
+      date: new Date().toISOString(),
+      results
+    });
+    await fs.writeFile(this.historyFile, JSON.stringify(history, null, 2));
+  }
+
+  async loadHistory() {
+    try {
+      const content = await fs.readFile(this.historyFile, 'utf8');
+      return JSON.parse(content);
+    } catch {
+      return { scans: [] };
+    }
+  }
+
+  async generateReport(results, template, compareWith) {
+    // Implementation for report generation
+    // This will be implemented when we work on the reporting features
+  }
+}
+
+// Then update the interactive command to use the class
+program
+  .command('interactive')
+  .alias('i')
+  .description('Start interactive mode')
+  .action(async () => {
+    try {
+      const interactive = new InteractiveMode();
+      await interactive.start();
     } catch (error) {
       console.error(chalk.red('Failed to start interactive mode:', error.message));
       process.exit(1);
@@ -683,49 +875,6 @@ program
     program.help();
   });
 
-// First define the themes
-const themes = {
-  default: {
-    info: chalk.blue,
-    success: chalk.green,
-    warning: chalk.yellow,
-    error: chalk.red,
-    critical: chalk.redBright,
-    dim: chalk.dim,
-    highlight: chalk.cyan,
-    normal: chalk.white,
-    title: chalk.blue.bold,
-    border: 'blue'
-  },
-  dark: {
-    info: chalk.blueBright,
-    success: chalk.greenBright,
-    warning: chalk.yellowBright,
-    error: chalk.redBright,
-    critical: chalk.bgRed.white,
-    dim: chalk.gray,
-    highlight: chalk.cyanBright,
-    normal: chalk.whiteBright,
-    title: chalk.cyanBright.bold,
-    border: 'cyan'
-  },
-  light: {
-    info: chalk.blue.dim,
-    success: chalk.green.dim,
-    warning: chalk.yellow.dim,
-    error: chalk.red.dim,
-    critical: chalk.bgRed.white.dim,
-    dim: chalk.gray,
-    highlight: chalk.cyan.dim,
-    normal: chalk.white.dim,
-    title: chalk.blue,
-    border: 'gray'
-  }
-};
-
-let currentTheme = 'default';
-let verboseMode = false;
-
 // Add visual status indicators and colors
 const statusIcons = {
   major: '🔴', // Major update needed
@@ -738,831 +887,119 @@ const statusIcons = {
   unknown: '❓', // Unknown status
 };
 
-// Then define the InteractiveMode class with all its methods
-class InteractiveMode {
-  constructor() {
-    this.currentView = 'main';
-    this.selectedIndex = 0;
-    this.results = [];
-    this.filters = {};
-    this.theme = themes[currentTheme];
-    this.modules = {};
-    this.searchQuery = '';
-    this.filterStatus = 'all';
-    this.sortBy = 'name';
-    this.showHelp = false;
-    this.pageSize = process.stdout.rows - 15; // Adjust for screen size
-    this.currentPage = 0;
-    this.loading = false;
-    this.lastAction = null;
-  }
+let verboseMode = false;
 
-  async loadModules() {
-    const [boxen, clear, figlet] = await Promise.all([
-      import('boxen'),
-      import('clear'),
-      import('figlet')
-    ]);
+// Add to the program options
+program
+  .option('--theme <theme>', 'Set color theme (default, dark, light)', 'default')
+  .option('--quiet', 'Minimal output')
+  .option('--verbose', 'Detailed output')
+  .option('--save-preset <name>', 'Save current filters as preset')
+  .option('--load-preset <name>', 'Load saved filter preset');
 
-    this.modules = {
-      boxen: boxen.default,
-      clear: clear.default,
-      figlet: figlet.default
-    };
-  }
-
-  async start() {
-    await this.loadModules();
-    this.modules.clear();
-    await this.showWelcomeScreen();
-    await this.performInitialScan();
-    this.setupKeyboardControls();
-    this.render();
-  }
-
-  async showWelcomeScreen() {
-    const welcomeBox = this.modules.boxen(
-      this.theme.title(
-        this.modules.figlet.textSync('Dep Guardian', { horizontalLayout: 'full' })
-      ) +
-      '\n\n' +
-      this.theme.normal('Interactive Dependency Management') +
-      '\n\n' +
-      this.theme.info('Scanning your dependencies...') +
-      '\n\n' +
-      this.theme.dim('This might take a moment...'),
-      {
-        padding: 1,
-        margin: 1,
-        borderStyle: 'double',
-        borderColor: this.theme.border,
-        float: 'center'
-      }
-    );
-    console.log(welcomeBox);
-  }
-
-  async performInitialScan() {
-    const spinner = ora({
-      text: 'Scanning dependencies...',
-      color: 'blue'
-    }).start();
+// Add these configuration functions
+async function loadConfig() {
+  try {
+    const explorer = cosmiconfig('depguard');
+    const result = await explorer.search();
     
-    try {
-      this.results = await performFullScan();
-      this.filteredResults = [...this.results];
-      spinner.succeed('Scan complete');
-    } catch (error) {
-      spinner.fail('Scan failed');
-      console.error(this.theme.error(error.message));
-    }
-  }
-
-  setupKeyboardControls() {
-    if (!process.stdin.isTTY) return;
-
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-
-    process.stdin.on('data', async (key) => {
-      if (key === '\u0003' || key === 'q') { // Ctrl+C or q
-        this.exit();
+    const defaultConfig = {
+      allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
+      maxVulnerability: 'moderate',
+      updateLevel: 'minor',
+      checks: {
+        security: true,
+        license: true,
+        updates: true
+      },
+      ignorePackages: [],
+      ci: {
+        failOnIssues: true,
+        reportFormat: 'junit',
+        createIssues: true
       }
-
-      switch (key) {
-        case '?':
-          this.showHelp = !this.showHelp;
-          break;
-        case 'h':
-          this.currentView = 'main';
-          break;
-        case 'f':
-          await this.showFilterPrompt();
-          break;
-        case 's':
-          await this.showSortPrompt();
-          break;
-        case '/':
-          await this.showSearchPrompt();
-          break;
-        case 't':
-          await this.cycleTheme();
-          break;
-        case 'v':
-          await this.toggleVerboseMode();
-          break;
-        case 'r':
-          await this.refresh();
-          break;
-        case '\r': // Enter
-          await this.handleEnter();
-          break;
-        case '\u001b[A': // Up arrow
-          this.moveSelection(-1);
-          break;
-        case '\u001b[B': // Down arrow
-          this.moveSelection(1);
-          break;
-        case '\u001b[5~': // Page Up
-          this.moveSelection(-10);
-          break;
-        case '\u001b[6~': // Page Down
-          this.moveSelection(10);
-          break;
-      }
-      this.render();
-    });
-  }
-
-  async showFilterPrompt() {
-    const { status } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'status',
-        message: 'Filter by status:',
-        choices: [
-          { name: 'All packages', value: 'all' },
-          { name: 'Needs update', value: 'outdated' },
-          { name: 'Security issues', value: 'security' },
-          { name: 'License issues', value: 'license' },
-          { name: 'Up to date', value: 'current' }
-        ]
-      }
-    ]);
-
-    this.filterStatus = status;
-    this.applyFilters();
-  }
-
-  async showSortPrompt() {
-    const { sortBy } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'sortBy',
-        message: 'Sort by:',
-        choices: [
-          { name: 'Name', value: 'name' },
-          { name: 'Status', value: 'status' },
-          { name: 'Security Risk', value: 'security' },
-          { name: 'License', value: 'license' }
-        ]
-      }
-    ]);
-
-    this.sortBy = sortBy;
-    this.applySort();
-  }
-
-  async showSearchPrompt() {
-    const { query } = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'query',
-        message: 'Search packages:',
-        prefix: '🔍'
-      }
-    ]);
-
-    this.searchQuery = query;
-    this.applyFilters();
-  }
-
-  applyFilters() {
-    let filtered = [...this.results];
-
-    // Apply search filter
-    if (this.searchQuery) {
-      filtered = filtered.filter(pkg => 
-        pkg.name.toLowerCase().includes(this.searchQuery.toLowerCase())
-      );
-    }
-
-    // Apply status filter
-    switch (this.filterStatus) {
-      case 'outdated':
-        filtered = filtered.filter(pkg => pkg.versionStatus !== 'UP-TO-DATE');
-        break;
-      case 'security':
-        filtered = filtered.filter(pkg => pkg.vulnCount > 0);
-        break;
-      case 'license':
-        filtered = filtered.filter(pkg => pkg.licenseStatus === 'NON-COMPLIANT');
-        break;
-      case 'current':
-        filtered = filtered.filter(pkg => pkg.versionStatus === 'UP-TO-DATE');
-        break;
-    }
-
-    this.filteredResults = filtered;
-    this.applySort();
-  }
-
-  applySort() {
-    this.filteredResults.sort((a, b) => {
-      switch (this.sortBy) {
-        case 'name':
-          return a.name.localeCompare(b.name);
-        case 'status':
-          return this.getStatusWeight(b) - this.getStatusWeight(a);
-        case 'security':
-          return b.vulnCount - a.vulnCount;
-        case 'license':
-          return (b.licenseStatus === 'NON-COMPLIANT') - (a.licenseStatus === 'NON-COMPLIANT');
-        default:
-          return 0;
-      }
-    });
-  }
-  
-  getStatusWeight(pkg) {
-    const weights = {
-      'major': 4,
-      'minor': 3,
-      'patch': 2,
-      'UP-TO-DATE': 1,
-      'ERROR': 0
     };
-    return weights[pkg.versionStatus] || 0;
-  }
 
-  moveSelection(delta) {
-    this.selectedIndex = Math.max(0, Math.min(
-      this.selectedIndex + delta,
-      this.filteredResults.length - 1
-    ));
-  }
+    if (!result || !result.config) {
+      return defaultConfig;
+    }
 
-  render() {
-    this.modules.clear();
-    
-    // Header with stats and current filters
-    const stats = this.getStats();
-    console.log(this.modules.boxen(
-      this.theme.title('Dependency Guardian') +
-      '\n\n' +
-      this.formatStats(stats) +
-      (this.lastAction ? `\n\n${this.theme.dim(this.lastAction)}` : ''),
-      {
-        padding: 1,
-        borderStyle: 'round',
-        borderColor: this.theme.border,
-        float: 'left'
+    return deepMerge(defaultConfig, result.config);
+  } catch (error) {
+    console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
+    return defaultConfig;
+  }
+}
+
+// Function to detect circular dependencies
+function detectCircularDependencies(tree) {
+  const visited = new Map();
+  const circularDeps = new Set();
+
+  function visit(node, path = []) {
+    if (visited.has(node)) {
+      const cycleStart = path.indexOf(node);
+      if (cycleStart !== -1) {
+        const cycle = path.slice(cycleStart).concat(node);
+        circularDeps.add(cycle.join(' → '));
       }
-    ));
+      return;
+    }
 
-    // Package list with enhanced status display
-    const startIdx = this.currentPage * this.pageSize;
-    const endIdx = Math.min(startIdx + this.pageSize, this.filteredResults.length);
-    const pageCount = Math.ceil(this.filteredResults.length / this.pageSize);
+    visited.set(node, true);
+    path.push(node);
 
-    this.filteredResults.slice(startIdx, endIdx).forEach((pkg, idx) => {
-      const isSelected = (startIdx + idx) === this.selectedIndex;
-      const { icons, details } = this.getPackageStatusInfo(pkg);
-      const prefix = isSelected ? this.theme.highlight('❯ ') : '  ';
-      const nameColor = isSelected ? this.theme.highlight : this.getStatusColor(pkg);
-      
-      console.log(
-        prefix +
-        nameColor(pkg.name.padEnd(30)) +
-        this.theme.dim(pkg.currentVersion.padEnd(15)) +
-        this.theme.info('→') +
-        this.theme.dim(pkg.latestVersion.padEnd(15)) +
-        ' ' + icons +
-        (isSelected ? `\n    ${this.theme.dim(details)}` : '')
-      );
+    const dependencies = tree[node] || [];
+    for (const dep of dependencies) {
+      visit(dep, [...path]);
+    }
+
+    path.pop();
+    visited.delete(node);
+  }
+
+  try {
+    Object.keys(tree).forEach(node => {
+      if (!visited.has(node)) {
+        visit(node);
+      }
     });
 
-    // Footer with pagination and active filters
-    const footer = [
-      `Page ${this.currentPage + 1}/${pageCount}`,
-      `Filter: ${this.filterStatus}`,
-      `Sort: ${this.sortBy}`,
-      this.searchQuery ? `Search: ${this.searchQuery}` : null
-    ].filter(Boolean).join(' | ');
-
-    console.log('\n' + this.theme.dim(footer));
-
-    // Help panel
-    if (this.showHelp) {
-      this.renderHelpPanel();
-    } else {
-      console.log('\n' + this.theme.dim('Press ? for help'));
-    }
+    return Array.from(circularDeps);
+  } catch (error) {
+    throw new Error(`Failed to detect circular dependencies: ${error.message}`);
   }
+}
 
-  renderHelpPanel() {
-    const helpContent = [
-      ['Navigation', [
-        ['↑/↓', 'Navigate packages'],
-        ['PgUp/PgDn', 'Jump pages'],
-        ['Home/End', 'First/Last package']
-      ]],
-      ['Actions', [
-        ['Enter', 'Package details'],
-        ['u', 'Update package'],
-        ['i', 'Package info'],
-        ['c', 'View changelog']
-      ]],
-      ['Filters & Sort', [
-        ['f', 'Filter menu'],
-        ['s', 'Sort menu'],
-        ['/', 'Search'],
-        ['x', 'Clear filters']
-      ]],
-      ['Display', [
-        ['?', 'Toggle help'],
-        ['t', 'Change theme'],
-        ['v', 'Toggle verbose'],
-        ['r', 'Refresh data']
-      ]]
-    ];
-
-    const helpBox = helpContent.map(([section, commands]) => {
-      return this.theme.title(section) + '\n' +
-        commands.map(([key, desc]) => 
-          `${this.theme.highlight(key.padEnd(10))}${this.theme.normal(desc)}`
-        ).join('\n');
-    }).join('\n\n');
-
-    console.log(this.modules.boxen(helpBox, {
-      padding: 1,
-      margin: { top: 1 },
-      borderStyle: 'round',
-      borderColor: this.theme.border,
-      float: 'right'
-    }));
-  }
-
-  getStats() {
-    const total = this.results.length;
-    const outdated = this.results.filter(p => p.versionStatus !== 'UP-TO-DATE').length;
-    const security = this.results.filter(p => p.vulnCount > 0).length;
-    const license = this.results.filter(p => p.licenseStatus === 'NON-COMPLIANT').length;
-
-    return { total, outdated, security, license };
-  }
-
-  formatStats({ total, outdated, security, license }) {
-    return [
-      `Total: ${this.theme.normal(total)}`,
-      `Updates: ${outdated > 0 ? this.theme.warning(outdated) : this.theme.success(0)}`,
-      `Security: ${security > 0 ? this.theme.error(security) : this.theme.success(0)}`,
-      `License: ${license > 0 ? this.theme.error(license) : this.theme.success(0)}`
-    ].join(' | ');
-  }
-
-  getPackageStatusInfo(pkg) {
-    const icons = [];
-    const details = [];
-
-    // Version status
-    if (pkg.versionStatus !== 'UP-TO-DATE') {
-      icons.push(statusIcons[pkg.versionStatus]);
-      const updateType = pkg.versionStatus === 'major' ? 'Breaking change' : 
-                        pkg.versionStatus === 'minor' ? 'New features' : 'Bug fixes';
-      details.push(`${updateType} available`);
-    }
-
-    // Security status
-    if (pkg.vulnCount > 0) {
-      icons.push(statusIcons.security);
-      details.push(`${pkg.vulnCount} ${pkg.vulnLevel} vulnerabilities`);
-    }
-
-    // License status
-    if (pkg.licenseStatus === 'NON-COMPLIANT') {
-      icons.push(statusIcons.license);
-      details.push(`License issue: ${pkg.license}`);
-    }
-
+// Function to analyze bundle size
+async function analyzeBundleSize(packageName, version) {
+  try {
+    const response = await axios.get(`https://bundlephobia.com/api/size?package=${packageName}@${version}`);
     return {
-      icons: icons.join(' '),
-      details: details.join(' | ')
+      size: response.data.size,
+      gzip: response.data.gzip,
+      dependencyCount: response.data.dependencyCount
     };
-  }
-
-  getStatusColor(pkg) {
-    switch (pkg.versionStatus) {
-      case 'major': return this.theme.error;
-      case 'minor': return this.theme.warning;
-      case 'patch': return this.theme.info;
-      case 'UP-TO-DATE': return this.theme.success;
-      default: return this.theme.normal;
-    }
-  }
-
-  async handleEnter() {
-    switch (this.currentView) {
-      case 'main':
-        this.currentView = 'details';
-        break;
-      case 'filters':
-        await this.applyFilter();
-        break;
-      case 'details':
-        await this.showPackageActions();
-        break;
-    }
-  }
-
-  async showPackageActions() {
-    const pkg = this.results[this.selectedIndex];
-    if (!pkg) return;
-
-    const { action } = await inquirer.prompt([
-        {
-          type: 'list',
-        name: 'action',
-        message: `Select action for ${pkg.name}`,
-        choices: [
-          { name: 'Update to Latest', value: 'update-latest' },
-          { name: 'View Changelog', value: 'changelog' },
-          { name: 'View Dependencies', value: 'dependencies' },
-          { name: 'View Security Info', value: 'security' },
-          { name: 'View License', value: 'license' },
-          { name: 'Back', value: 'back' }
-        ]
-      }
-    ]);
-
-    switch (action) {
-      case 'update-latest':
-        await this.updatePackage(pkg);
-        break;
-      case 'changelog':
-        await this.viewChangelog(pkg);
-        break;
-      case 'dependencies':
-        await this.viewDependencies(pkg);
-        break;
-      case 'security':
-        await this.viewSecurity(pkg);
-        break;
-      case 'license':
-        await this.viewLicense(pkg);
-        break;
-    }
-  }
-
-  async refresh() {
-    this.loading = true;
-    this.lastAction = 'Refreshing dependency data...';
-    this.render();
-
-    await this.performInitialScan();
-    
-    this.loading = false;
-    this.lastAction = 'Refresh complete';
-    this.render();
-  }
-
-  exit() {
-    this.modules.clear();
-    console.log(chalk.blue('Thanks for using Dependency Guardian!'));
-    process.exit(0);
-  }
-
-  async cycleTheme() {
-    const themeNames = Object.keys(themes);
-    const currentIndex = themeNames.indexOf(currentTheme);
-    currentTheme = themeNames[(currentIndex + 1) % themeNames.length];
-    this.theme = themes[currentTheme];
-    
-    const prefs = await loadUserPreferences();
-    await saveUserPreferences({ ...prefs, theme: currentTheme });
-    
-    this.lastAction = `Theme switched to: ${currentTheme}`;
-    this.render();
-  }
-
-  async toggleVerboseMode() {
-    verboseMode = !verboseMode;
-    const prefs = await loadUserPreferences();
-    await saveUserPreferences({ ...prefs, verbose: verboseMode });
-    
-    this.lastAction = `Verbose mode: ${verboseMode ? 'enabled' : 'disabled'}`;
-    this.render();
-  }
-
-  async updatePackage(pkg) {
-    this.loading = true;
-    this.lastAction = `Updating ${pkg.name}...`;
-    this.render();
-
-    try {
-      await execPromise(`npm install ${pkg.name}@${pkg.latestVersion}`);
-      this.lastAction = `✅ Updated ${pkg.name} to ${pkg.latestVersion}`;
-      await this.refresh();
-    } catch (error) {
-      this.lastAction = `❌ Failed to update ${pkg.name}: ${error.message}`;
-      this.render();
-    }
-  }
-
-  async viewChangelog(pkg) {
-    this.loading = true;
-    this.lastAction = `Loading changelog for ${pkg.name}...`;
-    this.render();
-
-    try {
-      const response = await axios.get(`https://api.github.com/repos/${pkg.repository}/releases`);
-      // Show changelog in a scrollable view
-      await this.showScrollableContent(
-        `Changelog for ${pkg.name}`,
-        response.data.map(release => (
-          `${this.theme.title(release.tag_name)}\n${release.body}\n`
-        )).join('\n')
-      );
-    } catch (error) {
-      this.lastAction = `❌ Failed to load changelog: ${error.message}`;
-      this.render();
-    }
-  }
-
-  async viewDependencies(pkg) {
-    this.loading = true;
-    this.lastAction = `Loading dependencies for ${pkg.name}...`;
-    this.render();
-
-    try {
-      const response = await axios.get(`https://registry.npmjs.org/${pkg.name}`);
-      const deps = response.data.versions[response.data['dist-tags'].latest].dependencies || {};
-      await this.showScrollableContent(
-        `Dependencies for ${pkg.name}@${pkg.currentVersion}`,
-        Object.entries(deps)
-          .map(([name, version]) => `${name}: ${version}`)
-          .join('\n')
-      );
-    } catch (error) {
-      this.lastAction = `❌ Failed to load dependencies: ${error.message}`;
-      this.render();
-    }
-  }
-
-  async viewSecurity(pkg) {
-    if (!pkg.vulnCount) {
-      this.lastAction = '✅ No known vulnerabilities';
-      this.render();
-        return;
-      }
-      
-    try {
-      const vulns = await this.getVulnerabilityDetails(pkg.name);
-      await this.showScrollableContent(
-        `Security Issues for ${pkg.name}`,
-        vulns.map(vuln => (
-          `${this.theme.error(vuln.severity.toUpperCase())}: ${vuln.title}\n` +
-          `${this.theme.dim(vuln.description)}\n\n` +
-          `Affected versions: ${vuln.vulnerable_versions}\n` +
-          `Patched versions: ${vuln.patched_versions}\n` +
-          `${this.theme.info('References:')}\n${vuln.references.join('\n')}\n`
-        )).join('\n---\n')
-      );
-    } catch (error) {
-      this.lastAction = `❌ Failed to load security info: ${error.message}`;
-      this.render();
-    }
-  }
-
-  async viewLicense(pkg) {
-    this.loading = true;
-    this.lastAction = `Loading license info for ${pkg.name}...`;
-    this.render();
-
-    try {
-      const response = await axios.get(`https://registry.npmjs.org/${pkg.name}/${pkg.currentVersion}`);
-      const license = response.data.license || 'Unknown';
-      const licenseText = await this.getLicenseText(pkg.name, license);
-      await this.showScrollableContent(
-        `License: ${license}`,
-        licenseText
-      );
-    } catch (error) {
-      this.lastAction = `❌ Failed to load license: ${error.message}`;
-      this.render();
-    }
-  }
-
-  async showScrollableContent(title, content) {
-    // Implementation for scrollable content view
-    // This could use a library like blessed for better terminal UI
-    console.clear();
-    console.log(this.modules.boxen(
-      `${this.theme.title(title)}\n\n${content}`,
-      {
-        padding: 1,
-        margin: 1,
-        borderStyle: 'round',
-        borderColor: this.theme.border
-      }
-    ));
-    console.log(this.theme.dim('\nPress q to go back'));
-    
-    // Wait for 'q' to be pressed
-    return new Promise(resolve => {
-      const onKeyPress = (key) => {
-        if (key === 'q') {
-          process.stdin.removeListener('data', onKeyPress);
-          resolve();
-          this.render();
-        }
-      };
-      process.stdin.on('data', onKeyPress);
-    });
+  } catch (error) {
+    console.error(`Failed to fetch bundle size for ${packageName}: ${error.message}`);
+    return null;
   }
 }
 
-// Then add the program command
-program
-  .command('interactive')
-  .alias('i')
-  .description('Start interactive mode')
-  .action(async () => {
-    try {
-      const interactive = new InteractiveMode();
-      await interactive.start();
-    } catch (error) {
-      console.error(chalk.red('Failed to start interactive mode:', error.message));
-      process.exit(1);
-    }
-  });
+// Function to detect duplicate dependencies
+function detectDuplicateDependencies(dependencies) {
+  const seen = {};
+  const duplicates = [];
 
-program
-  .command('report')
-  .description('Generate dependency reports')
-  .option('-t, --template <name>', 'Report template to use', 'default')
-  .option('-o, --output <file>', 'Output file path')
-  .option('-c, --compare', 'Compare with previous scan')
-  .option('-f, --format <format>', 'Output format (markdown, html, pdf)', 'markdown')
-  .option('--history', 'Show historical trends')
-  .action(async (options) => {
-    try {
-      const reportManager = new ReportManager();
-      const results = await performFullScan();
-      
-      // Save scan results for historical tracking
-      await reportManager.saveScanResults(results);
-
-      let compareWith = null;
-      if (options.compare) {
-        const history = JSON.parse(await fs.readFile(reportManager.historyFile, 'utf8'));
-        if (history.scans.length > 1) {
-          compareWith = history.scans[history.scans.length - 2].results;
-        }
-      }
-
-      const report = await reportManager.generateReport(results, options.template, compareWith);
-
-      if (options.output) {
-        await fs.writeFile(options.output, report);
-        console.log(chalk.green(`Report saved to: ${options.output}`));
-      } else {
-        console.log(report);
-      }
-
-    } catch (error) {
-      console.error(chalk.red(`Error generating report: ${error.message}`));
-      process.exit(1);
-    }
-  });
-
-program.on('command:*', function () {
-  console.error(chalk.red('Invalid command: %s\nSee --help for a list of available commands.'), program.args.join(' '));
-  process.exit(1);
-});
-
-async function loadPolicies(policyPaths) {
-  const policies = new Map();
-  
-  for (const policyPath of policyPaths) {
-    const content = await fs.readFile(policyPath, 'utf8');
-    const policy = policyPath.endsWith('.yaml') || policyPath.endsWith('.yml')
-      ? yaml.load(content)
-      : JSON.parse(content);
-      
-    policies.set(policy.name, {
-      ...policy,
-      source: policyPath
-    });
-  }
-  
-  return policies;
-}
-
-async function resolvePolicyInheritance(policies) {
-  const resolved = new Map();
-  
-  function mergePolicies(policy, visited = new Set()) {
-    if (visited.has(policy.name)) {
-      throw new Error(`Circular policy inheritance detected: ${Array.from(visited).join(' -> ')} -> ${policy.name}`);
-    }
-    
-    if (resolved.has(policy.name)) {
-      return resolved.get(policy.name);
-    }
-    
-    visited.add(policy.name);
-    
-    const parentPolicies = (policy.extends || [])
-      .map(parentName => {
-        const parent = policies.get(parentName);
-        if (!parent) {
-          throw new Error(`Parent policy "${parentName}" not found for "${policy.name}"`);
-        }
-        return mergePolicies(parent, visited);
-      });
-    
-    const mergedPolicy = parentPolicies.reduce((acc, parent) => deepMerge(acc, parent), {});
-    const finalPolicy = deepMerge(mergedPolicy, policy);
-    
-    resolved.set(policy.name, finalPolicy);
-    return finalPolicy;
-  }
-  
-  for (const [name, policy] of policies.entries()) {
-    if (!resolved.has(name)) {
-      mergePolicies(policy);
+  for (const [name, version] of Object.entries(dependencies)) {
+    if (seen[name]) {
+      duplicates.push({ name, version });
+    } else {
+      seen[name] = version;
     }
   }
-  
-  return resolved;
-}
 
-function validatePolicy(policy) {
-  const errors = [];
-  const warnings = [];
-  
-  // Validate required fields
-  if (!policy.name) errors.push('Policy must have a name');
-  if (!policy.version) errors.push('Policy must have a version');
-  if (!policy.rules) errors.push('Policy must have rules defined');
-  
-  // Validate rules
-  if (policy.rules) {
-    if (policy.rules.licenses) {
-      if (!Array.isArray(policy.rules.licenses.allowed)) {
-        errors.push('License allowlist must be an array');
-      }
-      if (!Array.isArray(policy.rules.licenses.forbidden)) {
-        errors.push('License blocklist must be an array');
-      }
-    }
-    
-    if (policy.rules.security) {
-      const validSeverities = ['low', 'moderate', 'high', 'critical'];
-      if (!validSeverities.includes(policy.rules.security.maxSeverity)) {
-        errors.push('Invalid security severity level');
-      }
-    }
-  }
-  
-  return { errors, warnings };
-}
-
-async function generatePolicyDocumentation(policy, template = 'default') {
-  const templates = {
-    default: `# ${policy.name} (v${policy.version})
-
-## Description
-${policy.description || 'No description provided.'}
-
-## License Rules
-- Allowed: ${policy.rules.licenses.allowed.join(', ')}
-- Forbidden: ${policy.rules.licenses.forbidden.join(', ')}
-- Unknown License Handling: ${policy.rules.licenses.unknown}
-
-## Security Rules
-- Maximum Severity: ${policy.rules.security.maxSeverity}
-- Auto-fix Enabled: ${policy.rules.security.autofix}
-${policy.rules.security.exceptions.length ? '\nExceptions:\n' + policy.rules.security.exceptions.map(e => `- ${e}`).join('\n') : ''}
-
-## Versioning Rules
-- Maximum Package Age: ${policy.rules.versioning.maxAge}
-- Major Updates: ${policy.rules.versioning.allowMajorUpdates ? 'Allowed' : 'Forbidden'}
-- Auto-merge Settings:
-  - Patch: ${policy.rules.versioning.autoMerge.patch}
-  - Minor: ${policy.rules.versioning.autoMerge.minor}
-  - Major: ${policy.rules.versioning.autoMerge.major}
-
-## Dependency Rules
-- Maximum Direct Dependencies: ${policy.rules.dependencies.maxDirect}
-- Maximum Dependency Depth: ${policy.rules.dependencies.maxDepth}
-- Duplicates Allowed: ${policy.rules.dependencies.duplicatesAllowed}
-${policy.rules.dependencies.bannedPackages.length ? '\nBanned Packages:\n' + policy.rules.dependencies.bannedPackages.map(p => `- ${p}`).join('\n') : ''}
-${policy.rules.dependencies.requiredPackages.length ? '\nRequired Packages:\n' + policy.rules.dependencies.requiredPackages.map(p => `- ${p}`).join('\n') : ''}
-
-## Notifications
-- Slack: ${policy.notifications.slack}
-- Email: ${policy.notifications.email}
-- GitHub Issues: ${policy.notifications.githubIssues}
-
----
-Generated on: ${new Date().toISOString()}
-`
-  };
-  
-  return templates[template] || templates.default;
+  return duplicates;
 }
 
 async function performFullScan(config = {}) {
@@ -2336,122 +1773,182 @@ async function toggleVerboseMode() {
   refreshDisplay();
 }
 
-// Add to the program options
 program
-  .option('--theme <theme>', 'Set color theme (default, dark, light)', 'default')
-  .option('--quiet', 'Minimal output')
-  .option('--verbose', 'Detailed output')
-  .option('--save-preset <name>', 'Save current filters as preset')
-  .option('--load-preset <name>', 'Load saved filter preset');
+  .command('report')
+  .description('Generate dependency reports')
+  .option('-t, --template <name>', 'Report template to use', 'default')
+  .option('-o, --output <file>', 'Output file path')
+  .option('-c, --compare', 'Compare with previous scan')
+  .option('-f, --format <format>', 'Output format (markdown, html, pdf)', 'markdown')
+  .option('--history', 'Show historical trends')
+  .action(async (options) => {
+    try {
+      const reportManager = new ReportManager();
+      const results = await performFullScan();
+      
+      // Save scan results for historical tracking
+      await reportManager.saveScanResults(results);
 
-// Add these configuration functions
-async function loadConfig() {
-  try {
-    const explorer = cosmiconfig('depguard');
-    const result = await explorer.search();
-    
-    const defaultConfig = {
-      allowedLicenses: ['MIT', 'ISC', 'Apache-2.0', 'BSD-3-Clause'],
-      maxVulnerability: 'moderate',
-      updateLevel: 'minor',
-      checks: {
-        security: true,
-        license: true,
-        updates: true
-      },
-      ignorePackages: [],
-      ci: {
-        failOnIssues: true,
-        reportFormat: 'junit',
-        createIssues: true
+      let compareWith = null;
+      if (options.compare) {
+        const history = JSON.parse(await fs.readFile(reportManager.historyFile, 'utf8'));
+        if (history.scans.length > 1) {
+          compareWith = history.scans[history.scans.length - 2].results;
+        }
       }
-    };
 
-    if (!result || !result.config) {
-      return defaultConfig;
-    }
+      const report = await reportManager.generateReport(results, options.template, compareWith);
 
-    return deepMerge(defaultConfig, result.config);
-  } catch (error) {
-    console.warn(chalk.yellow('Warning: Could not load config, using defaults'));
-    return defaultConfig;
-  }
-}
-
-// Function to detect circular dependencies
-function detectCircularDependencies(tree) {
-  const visited = new Map();
-  const circularDeps = new Set();
-
-  function visit(node, path = []) {
-    if (visited.has(node)) {
-      const cycleStart = path.indexOf(node);
-      if (cycleStart !== -1) {
-        const cycle = path.slice(cycleStart).concat(node);
-        circularDeps.add(cycle.join(' → '));
+      if (options.output) {
+        await fs.writeFile(options.output, report);
+        console.log(chalk.green(`Report saved to: ${options.output}`));
+      } else {
+        console.log(report);
       }
-      return;
+
+    } catch (error) {
+      console.error(chalk.red(`Error generating report: ${error.message}`));
+      process.exit(1);
     }
+  });
 
-    visited.set(node, true);
-    path.push(node);
+program.on('command:*', function () {
+  console.error(chalk.red('Invalid command: %s\nSee --help for a list of available commands.'), program.args.join(' '));
+  process.exit(1);
+});
 
-    const dependencies = tree[node] || [];
-    for (const dep of dependencies) {
-      visit(dep, [...path]);
-    }
-
-    path.pop();
-    visited.delete(node);
-  }
-
-  try {
-    Object.keys(tree).forEach(node => {
-      if (!visited.has(node)) {
-        visit(node);
-      }
+async function loadPolicies(policyPaths) {
+  const policies = new Map();
+  
+  for (const policyPath of policyPaths) {
+    const content = await fs.readFile(policyPath, 'utf8');
+    const policy = policyPath.endsWith('.yaml') || policyPath.endsWith('.yml')
+      ? yaml.load(content)
+      : JSON.parse(content);
+      
+    policies.set(policy.name, {
+      ...policy,
+      source: policyPath
     });
-
-    return Array.from(circularDeps);
-  } catch (error) {
-    throw new Error(`Failed to detect circular dependencies: ${error.message}`);
   }
+  
+  return policies;
 }
 
-// Function to analyze bundle size
-async function analyzeBundleSize(packageName, version) {
-  try {
-    const response = await axios.get(`https://bundlephobia.com/api/size?package=${packageName}@${version}`);
-    return {
-      size: response.data.size,
-      gzip: response.data.gzip,
-      dependencyCount: response.data.dependencyCount
-    };
-  } catch (error) {
-    console.error(`Failed to fetch bundle size for ${packageName}: ${error.message}`);
-    return null;
+async function resolvePolicyInheritance(policies) {
+  const resolved = new Map();
+  
+  function mergePolicies(policy, visited = new Set()) {
+    if (visited.has(policy.name)) {
+      throw new Error(`Circular policy inheritance detected: ${Array.from(visited).join(' -> ')} -> ${policy.name}`);
+    }
+    
+    if (resolved.has(policy.name)) {
+      return resolved.get(policy.name);
+    }
+    
+    visited.add(policy.name);
+    
+    const parentPolicies = (policy.extends || [])
+      .map(parentName => {
+        const parent = policies.get(parentName);
+        if (!parent) {
+          throw new Error(`Parent policy "${parentName}" not found for "${policy.name}"`);
+        }
+        return mergePolicies(parent, visited);
+      });
+    
+    const mergedPolicy = parentPolicies.reduce((acc, parent) => deepMerge(acc, parent), {});
+    const finalPolicy = deepMerge(mergedPolicy, policy);
+    
+    resolved.set(policy.name, finalPolicy);
+    return finalPolicy;
   }
-}
-
-// Function to detect duplicate dependencies
-function detectDuplicateDependencies(dependencies) {
-  const seen = {};
-  const duplicates = [];
-
-  for (const [name, version] of Object.entries(dependencies)) {
-    if (seen[name]) {
-      duplicates.push({ name, version });
-    } else {
-      seen[name] = version;
+  
+  for (const [name, policy] of policies.entries()) {
+    if (!resolved.has(name)) {
+      mergePolicies(policy);
     }
   }
-
-  return duplicates;
+  
+  return resolved;
 }
 
-// Add debug logging
-const DEBUG = process.env.DEBUG || false;
-const debugLog = (...args) => DEBUG && console.log(...args);
+function validatePolicy(policy) {
+  const errors = [];
+  const warnings = [];
+  
+  // Validate required fields
+  if (!policy.name) errors.push('Policy must have a name');
+  if (!policy.version) errors.push('Policy must have a version');
+  if (!policy.rules) errors.push('Policy must have rules defined');
+  
+  // Validate rules
+  if (policy.rules) {
+    if (policy.rules.licenses) {
+      if (!Array.isArray(policy.rules.licenses.allowed)) {
+        errors.push('License allowlist must be an array');
+      }
+      if (!Array.isArray(policy.rules.licenses.forbidden)) {
+        errors.push('License blocklist must be an array');
+      }
+    }
+    
+    if (policy.rules.security) {
+      const validSeverities = ['low', 'moderate', 'high', 'critical'];
+      if (!validSeverities.includes(policy.rules.security.maxSeverity)) {
+        errors.push('Invalid security severity level');
+      }
+    }
+  }
+  
+  return { errors, warnings };
+}
+
+async function generatePolicyDocumentation(policy, template = 'default') {
+  const templates = {
+    default: `# ${policy.name} (v${policy.version})
+
+## Description
+${policy.description || 'No description provided.'}
+
+## License Rules
+- Allowed: ${policy.rules.licenses.allowed.join(', ')}
+- Forbidden: ${policy.rules.licenses.forbidden.join(', ')}
+- Unknown License Handling: ${policy.rules.licenses.unknown}
+
+## Security Rules
+- Maximum Severity: ${policy.rules.security.maxSeverity}
+- Auto-fix Enabled: ${policy.rules.security.autofix}
+${policy.rules.security.exceptions.length ? '\nExceptions:\n' + policy.rules.security.exceptions.map(e => `- ${e}`).join('\n') : ''}
+
+## Versioning Rules
+- Maximum Package Age: ${policy.rules.versioning.maxAge}
+- Major Updates: ${policy.rules.versioning.allowMajorUpdates ? 'Allowed' : 'Forbidden'}
+- Auto-merge Settings:
+  - Patch: ${policy.rules.versioning.autoMerge.patch}
+  - Minor: ${policy.rules.versioning.autoMerge.minor}
+  - Major: ${policy.rules.versioning.autoMerge.major}
+
+## Dependency Rules
+- Maximum Direct Dependencies: ${policy.rules.dependencies.maxDirect}
+- Maximum Dependency Depth: ${policy.rules.dependencies.maxDepth}
+- Duplicates Allowed: ${policy.rules.dependencies.duplicatesAllowed}
+${policy.rules.dependencies.bannedPackages.length ? '\nBanned Packages:\n' + policy.rules.dependencies.bannedPackages.map(p => `- ${p}`).join('\n') : ''}
+${policy.rules.dependencies.requiredPackages.length ? '\nRequired Packages:\n' + policy.rules.dependencies.requiredPackages.map(p => `- ${p}`).join('\n') : ''}
+
+## Notifications
+- Slack: ${policy.notifications.slack}
+- Email: ${policy.notifications.email}
+- GitHub Issues: ${policy.notifications.githubIssues}
+
+---
+Generated on: ${new Date().toISOString()}
+`
+  };
+  
+  return templates[template] || templates.default;
+}
 
 // At the start of the file, after imports
 debugLog('Starting dependency-guardian...');
