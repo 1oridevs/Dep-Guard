@@ -12,7 +12,8 @@ A clear and concise description of what the bug is.
 **To Reproduce**
 Steps to reproduce the behavior:
 1. Run command '...'
-2. See error
+2. With configuration '...'
+3. See error
 
 **Expected behavior**
 A clear and concise description of what you expected to happen.
@@ -21,9 +22,9 @@ A clear and concise description of what you expected to happen.
 If applicable, add screenshots to help explain your problem.
 
 **Environment:**
- - OS: [e.g. Ubuntu 20.04]
- - Node Version: [e.g. 18.12.0]
- - Tool Version: [e.g. 1.0.0]
+ - OS: [e.g. Ubuntu 22.04]
+ - Node version: [e.g. 20.0.0]
+ - Version: [e.g. 1.0.0]
 
 **Additional context**
 Add any other context about the problem here. 

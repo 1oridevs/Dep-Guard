@@ -1,0 +1,18 @@
+{
+  "dependencies": {
+    "maxAge": 180,
+    "allowedUpdateTypes": ["patch"],
+    "blockedPackages": [],
+    "allowedPackages": []
+  },
+  "security": {
+    "maxVulnerabilityLevel": "low",
+    "requireAudit": true,
+    "ignoreVulnerabilities": []
+  },
+  "licenses": {
+    "allowed": ["MIT", "Apache-2.0"],
+    "blocked": ["GPL", "AGPL", "LGPL", "MPL"],
+    "unknown": "block"
+  }
+} 
