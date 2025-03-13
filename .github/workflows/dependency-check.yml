@@ -1,4 +1,4 @@
-name: Dependency Guardian Check
+name: Dependency Check
 
 on:
   push:
@@ -12,30 +12,38 @@ on:
       - 'package-lock.json'
       - 'yarn.lock'
   schedule:
-    - cron: '0 0 * * 1'
+    - cron: '0 0 * * 1'  # Weekly on Monday
+  workflow_dispatch:
 
 jobs:
-  check-dependencies:
+  check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
       
       - name: Install dependencies
         run: npm ci
       
-      - name: Install Dependency Guardian
-        run: npm install -g dependency-guardian
-      
-      - name: Run Dependency Check
-        run: dependency-guardian scan --include-dev --format json --output dependency-report.json
-        continue-on-error: true
-      
-      - name: Upload Scan Results
-        uses: actions/upload-artifact@v3
+      - name: Run dependency checks
+        id: depcheck
+        run: node index.js ci
+        
+      - name: Create Issue on Failure
+        if: failure()
+        uses: actions/github-script@v7
         with:
-          name: dependency-scan-results
-          path: dependency-report.json 
+          script: |
+            const title = '🛡️ Dependency Issues Detected';
+            const body = `Dependency check failed in ${context.sha}.\n\nPlease review the workflow logs for details.`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['dependencies', 'security']
+            }); 

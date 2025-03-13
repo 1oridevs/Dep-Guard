@@ -1,68 +1,64 @@
 # Contributing to Dependency Guardian
 
-Thank you for considering contributing to Dependency Guardian! We welcome contributions from the community and are excited to see how you can help improve the project.
-
-## How to Contribute
-
-### Reporting Bugs
-
-If you find a bug, please report it by opening an issue on our [GitHub repository](https://github.com/1oridevs/dependency-guardian/issues). Please include as much detail as possible, including steps to reproduce the issue, your environment, and any relevant logs or screenshots.
-
-### Suggesting Features
-
-We welcome feature suggestions! If you have an idea for a new feature, please open an issue on our [GitHub repository](https://github.com/1oridevs/dependency-guardian/issues) and describe your idea in detail. Please include any potential use cases and how the feature would benefit users.
-
-### Code Contributions
-
-1. **Fork the Repository**: Start by forking the repository on GitHub.
-
-2. **Clone Your Fork**: Clone your forked repository to your local machine.
-
-   ```bash
-   git clone https://github.com/1oridevs/dependency-guardian.git
-   cd dependency-guardian
-   ```
-
-3. **Create a Branch**: Create a new branch for your feature or bug fix.
-
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-4. **Make Changes**: Implement your changes in the codebase. Please follow the existing code style and conventions.
-
-5. **Test Your Changes**: Ensure that your changes do not break existing functionality. Run the tests and add new tests if necessary.
-
-   ```bash
-   npm test
-   ```
-
-6. **Commit Your Changes**: Commit your changes with a descriptive commit message.
-
-   ```bash
-   git commit -m "Add feature: your feature description"
-   ```
-
-7. **Push to Your Fork**: Push your changes to your forked repository.
-
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-
-8. **Open a Pull Request**: Go to the original repository on GitHub and open a pull request. Please provide a detailed description of your changes and any relevant information.
+First off, thank you for considering contributing to Dependency Guardian! It's people like you that make Dependency Guardian such a great tool.
 
 ## Code of Conduct
 
-Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project, you agree to abide by its terms.
+This project and everyone participating in it is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
 
-## Getting Help
+## How Can I Contribute?
 
-If you need help or have questions, feel free to reach out by opening an issue or joining our community discussions.
+### Reporting Bugs
+
+Before creating bug reports, please check the issue list as you might find out that you don't need to create one. When you are creating a bug report, please include as many details as possible:
+
+* Use a clear and descriptive title
+* Describe the exact steps which reproduce the problem
+* Provide specific examples to demonstrate the steps
+* Describe the behavior you observed after following the steps
+* Explain which behavior you expected to see instead and why
+* Include screenshots if possible
+
+### Suggesting Enhancements
+
+Enhancement suggestions are tracked as GitHub issues. When creating an enhancement suggestion, please include:
+
+* A clear and descriptive title
+* A detailed description of the proposed functionality
+* Explain why this enhancement would be useful
+* List any alternatives you've considered
+
+### Pull Requests
+
+* Fill in the required template
+* Do not include issue numbers in the PR title
+* Include screenshots and animated GIFs in your pull request whenever possible
+* Follow the JavaScript styleguide
+* Include thoughtfully-worded, well-structured tests
+* Document new code
+* End all files with a newline
+
+## Development Process
+
+1. Fork the repo
+2. Create a new branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Run the tests
+5. Commit your changes (`git commit -m 'Add some amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
+
+## Style Guide
+
+* Use 2 spaces for indentation
+* Use semicolons
+* 80 character line length
+* Use `const` for all of your references; avoid using `var`
+* Use template strings instead of string concatenation
+* Use the spread operator instead of `.apply()`
+* Use destructuring
+* Use meaningful variable names
 
 ## License
 
-By contributing to Dependency Guardian, you agree that your contributions will be licensed under the MIT License.
-
----
-
-Thank you for your contributions! We appreciate your support and look forward to working with you.
+By contributing, you agree that your contributions will be licensed under its MIT License.
