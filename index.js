@@ -515,13 +515,149 @@ program
   .command('interactive')
   .alias('i')
   .description('Start interactive mode')
-  .action(/* ... */);
+  .action(async () => {
+    try {
+      console.log(chalk.blue('\n📦 Dependency Guardian Interactive Mode'));
+      console.log(chalk.dim('=====================================\n'));
+
+      const spinner = ora('Loading dependencies...').start();
+      
+      const projectPath = process.cwd();
+      const packageJson = await readPackageJson(projectPath);
+      const dependencies = packageJson.dependencies || {};
+      
+      if (Object.keys(dependencies).length === 0) {
+        spinner.info('No dependencies found in package.json');
+        process.exit(0);
+      }
+
+      // Perform the scan
+      const results = await performDependencyScan(dependencies);
+      spinner.succeed('Dependencies loaded');
+
+      // Group results by update type
+      const grouped = results.reduce((acc, result) => {
+        const type = result.updateType || 'unknown';
+        if (!acc[type]) acc[type] = [];
+        acc[type].push(result);
+        return acc;
+      }, {});
+
+      // Display interactive menu
+      const choices = [
+        new inquirer.Separator('=== Updates ==='),
+        ...(grouped.major?.length ? [{ name: `Major Updates (${grouped.major.length})`, value: 'major' }] : []),
+        ...(grouped.minor?.length ? [{ name: `Minor Updates (${grouped.minor.length})`, value: 'minor' }] : []),
+        ...(grouped.patch?.length ? [{ name: `Patch Updates (${grouped.patch.length})`, value: 'patch' }] : []),
+        new inquirer.Separator('=== Actions ==='),
+        { name: 'Scan Again', value: 'scan' },
+        { name: 'Exit', value: 'exit' }
+      ];
+
+      while (true) {
+        const { action } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'action',
+            message: 'What would you like to do?',
+            choices
+          }
+        ]);
+
+        if (action === 'exit') {
+          console.log(chalk.dim('\nGoodbye! 👋'));
+          process.exit(0);
+        }
+
+        if (action === 'scan') {
+          console.clear();
+          continue;
+        }
+
+        // Show updates for selected type
+        if (['major', 'minor', 'patch'].includes(action)) {
+          const updates = grouped[action];
+          const { selected } = await inquirer.prompt([
+            {
+              type: 'checkbox',
+              name: 'selected',
+              message: `Select ${action} updates to apply:`,
+              choices: updates.map(dep => ({
+                name: `${dep.name} (${dep.currentVersion} → ${dep.latestVersion})`,
+                value: dep
+              }))
+            }
+          ]);
+
+          if (selected.length > 0) {
+            console.log(chalk.yellow('\nSelected updates:'));
+            selected.forEach(dep => {
+              console.log(chalk.dim(`- ${dep.name}: ${dep.currentVersion} → ${dep.latestVersion}`));
+            });
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error(chalk.red('Failed to start interactive mode:', error.message));
+      process.exit(1);
+    }
+  });
 
 program
   .command('ci')
   .description('Run in CI mode')
   .option('--report <format>', 'Report format (junit, json)', 'junit')
-  .action(/* ... */);
+  .action(async (options) => {
+    const spinner = ora('Running CI checks...').start();
+    
+    try {
+      const projectPath = process.cwd();
+      const packageJson = await readPackageJson(projectPath);
+      const dependencies = packageJson.dependencies || {};
+      
+      if (Object.keys(dependencies).length === 0) {
+        spinner.info('No dependencies found in package.json');
+        process.exit(0);
+      }
+
+      // Perform the scan
+      const results = await performDependencyScan(dependencies);
+      
+      // Generate report
+      let report;
+      if (options.report === 'junit') {
+        report = await generateJUnitReport(results);
+      } else {
+        report = JSON.stringify(results, null, 2);
+      }
+
+      // Write report to file
+      const reportFile = options.report === 'junit' ? 'dependency-report.xml' : 'dependency-report.json';
+      await fs.writeFile(reportFile, report);
+
+      // Set GitHub Actions output if running in GitHub Actions
+      if (process.env.GITHUB_ACTIONS) {
+        const hasIssues = results.length > 0;
+        console.log(`::set-output name=hasIssues::${hasIssues}`);
+        console.log(`::set-output name=issueCount::${results.length}`);
+        process.env.DEPGUARD_ISSUES = JSON.stringify(results);
+      }
+
+      // Exit with error if issues found
+      if (results.length > 0) {
+        spinner.fail(`Found ${results.length} issues`);
+        process.exit(1);
+      }
+
+      spinner.succeed('All checks passed');
+      process.exit(0);
+
+    } catch (error) {
+      spinner.fail(chalk.red(`CI check failed: ${error.message}`));
+      process.exit(1);
+    }
+  });
 
 program
   .command('cache')
@@ -1247,7 +1383,7 @@ program
       const interactive = new InteractiveMode();
       await interactive.start();
     } catch (error) {
-      console.error(chalk.red('Error in interactive mode:', error.message));
+      console.error(chalk.red('Failed to start interactive mode:', error.message));
       process.exit(1);
     }
   });
@@ -1610,41 +1746,43 @@ async function runCICheck() {
 }
 
 async function generateJUnitReport(results) {
-  const testcases = results.map(dep => ({
-    testcase: [
-      { _attr: { 
-        name: dep.name,
-        classname: 'DependencyGuardian',
-        time: '0'
-      }},
-      ...(dep.vulnCount > 0 ? [{
-        failure: {
-          _attr: { message: `${dep.vulnCount} ${dep.vulnLevel} vulnerabilities found` }
-        }
-      }] : []),
-      ...(dep.licenseStatus === 'NON-COMPLIANT' ? [{
-        failure: {
-          _attr: { message: `Non-compliant license: ${dep.license}` }
-        }
-      }] : [])
-    ]
-  }));
-
-  const xmlReport = {
+  const testsuites = {
     testsuites: [{
-      testsuite: [
-        { _attr: { 
-          name: 'DependencyGuardian',
-          tests: results.length,
-          failures: results.filter(r => r.vulnCount > 0 || r.licenseStatus === 'NON-COMPLIANT').length,
-          time: '0'
-        }},
-        ...testcases
-      ]
+      _attr: {
+        name: 'dependency-guardian',
+        tests: results.length,
+        failures: results.length,
+        time: '0'
+      }
     }]
   };
 
-  await fsPromises.writeFile('dependency-report.xml', xml(xmlReport, { indent: '  ' }));
+  results.forEach(result => {
+    testsuites.testsuites.push({
+      testcase: [
+        {
+          _attr: {
+            name: result.name,
+            classname: 'DependencyCheck',
+            time: '0'
+          }
+        },
+        {
+          failure: [
+            {
+              _attr: {
+                type: result.updateType || 'update-needed',
+                message: `Update available: ${result.currentVersion} → ${result.latestVersion}`
+              }
+            },
+            `Current version: ${result.currentVersion}\nLatest version: ${result.latestVersion}\nUpdate type: ${result.updateType || 'unknown'}`
+          ]
+        }
+      ]
+    });
+  });
+
+  return xml(testsuites, { declaration: true, indent: '  ' });
 }
 
 function filterDependencies(results, filters) {
