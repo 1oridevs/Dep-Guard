@@ -37,3 +37,11 @@ npm-debug.log*
 # App specific
 .depguard/history.json
 dependency-report.xml
+reports/
+
+# Keep these files
+!.depguard/preferences.json
+!.github/**
+!.hooks/**
+!templates/**
+!policies/**

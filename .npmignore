@@ -1,0 +1,33 @@
+# Source control
+.git/
+.github/
+.gitignore
+
+# Tests
+tests/
+coverage/
+.nyc_output/
+jest.config.js
+
+# Development
+.vscode/
+.idea/
+*.sublime-*
+.eslintrc.js
+.prettierrc
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.travis.yml
+.gitlab-ci.yml
+.github/workflows/
+
+# Project specific
+.depguard/history.json
+reports/
+templates/
+policies/ 

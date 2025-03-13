@@ -1,43 +1,47 @@
 const chalk = require('chalk');
 
-const DEBUG = process.env.DEBUG || false;
-const verboseMode = process.env.VERBOSE || false;
-
 class Logger {
   constructor() {
-    this.debugMode = DEBUG;
-    this.verboseMode = verboseMode;
+    this.debugMode = process.env.DEBUG === 'true';
+    this.silent = process.env.SILENT === 'true';
   }
 
   debug(...args) {
-    if (this.debugMode) {
-      console.log(chalk.gray('[DEBUG]'), ...args);
+    if (this.debugMode && !this.silent) {
+      console.log(chalk.gray('🔍 DEBUG:'), ...args);
     }
   }
 
-  info(message) {
-    console.log(chalk.blue(message));
-  }
-
-  warn(message) {
-    console.log(chalk.yellow(message));
-  }
-
-  error(message, error = null) {
-    console.error(chalk.red(message));
-    if (error && this.debugMode) {
-      console.error(error);
+  info(...args) {
+    if (!this.silent) {
+      console.log(chalk.blue('ℹ️ INFO:'), ...args);
     }
   }
 
-  success(message) {
-    console.log(chalk.green(message));
+  success(...args) {
+    if (!this.silent) {
+      console.log(chalk.green('✅ SUCCESS:'), ...args);
+    }
   }
 
-  verbose(message) {
-    if (this.verboseMode) {
-      console.log(chalk.gray(message));
+  warn(...args) {
+    if (!this.silent) {
+      console.log(chalk.yellow('⚠️ WARNING:'), ...args);
     }
+  }
+
+  error(...args) {
+    if (!this.silent) {
+      console.error(chalk.red('❌ ERROR:'), ...args);
+    }
+  }
+
+  setDebug(enabled) {
+    this.debugMode = enabled;
+  }
+
+  setSilent(enabled) {
+    this.silent = enabled;
   }
 }
 
