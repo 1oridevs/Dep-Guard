@@ -244,25 +244,76 @@ program
 program
   .command('scan')
   .description('Scan dependencies for issues')
-  .option('--format <type>', 'Output format (json, csv, html)', 'json')
+  .option('--format <type>', 'Output format (json, csv, html, pretty)', 'pretty')
   .action(async (options) => {
+    debugLog('Executing scan command with options:', options);
     const spinner = ora('Scanning dependencies...').start();
     
     try {
       const projectPath = process.cwd();
+      debugLog('Project path:', projectPath);
+
+      // Read package.json
       const packageJson = await readPackageJson(projectPath);
+      debugLog('Package.json found:', packageJson.name);
+
       const dependencies = packageJson.dependencies || {};
+      const depsCount = Object.keys(dependencies).length;
+      debugLog('Dependencies found:', depsCount);
       
-      if (Object.keys(dependencies).length === 0) {
+      if (depsCount === 0) {
         spinner.info('No dependencies found in package.json');
         return;
       }
 
-      // Perform the scan
-      const results = await performDependencyScan(dependencies);
+      // Perform the scan with progress
+      spinner.text = 'Analyzing dependencies...';
+      const results = [];
+      let processed = 0;
 
-      // Handle output format
-      switch (options.format) {
+      for (const [name, version] of Object.entries(dependencies)) {
+        processed++;
+        spinner.text = `Analyzing dependencies... (${processed}/${depsCount})`;
+        
+        try {
+          const latestVersion = await getLatestVersion(name);
+          debugLog(`Checking ${name}: ${version} -> ${latestVersion}`);
+          
+          if (semver.lt(version.replace(/^\^|~/, ''), latestVersion)) {
+            const diff = semver.diff(version.replace(/^\^|~/, ''), latestVersion);
+            results.push({
+              name,
+              currentVersion: version,
+              latestVersion,
+              status: diff || 'outdated',
+              updateType: diff
+            });
+          }
+        } catch (error) {
+          debugLog(`Error checking ${name}:`, error);
+          spinner.warn(`Failed to check ${name}: ${error.message}`);
+        }
+      }
+
+      spinner.stop();
+      debugLog('Scan completed. Results:', results);
+
+      // Display results
+      if (results.length === 0) {
+        console.log(chalk.green('\n✅ All dependencies are up to date!'));
+        return;
+      }
+
+      // Group and display results
+      const grouped = results.reduce((acc, result) => {
+        const type = result.updateType || 'unknown';
+        if (!acc[type]) acc[type] = [];
+        acc[type].push(result);
+        return acc;
+      }, {});
+
+      // Output based on format
+      switch (options.format.toLowerCase()) {
         case 'json':
           console.log(JSON.stringify(results, null, 2));
           break;
@@ -273,48 +324,144 @@ program
           console.log(convertResultsToHTML(results));
           break;
         default:
-          console.error(chalk.red(`Invalid format: ${options.format}`));
-          process.exit(1);
+          // Pretty print
+          console.log('\n📦 Dependency Scan Results');
+          console.log('=======================\n');
+
+          if (grouped.major?.length) {
+            console.log(chalk.red('🔴 Major Updates Required:'));
+            grouped.major.forEach(dep => {
+              console.log(chalk.dim('─────────────────────────'));
+              console.log(chalk.bold(dep.name));
+              console.log(chalk.dim(`Current: ${dep.currentVersion}`));
+              console.log(chalk.green(`Latest:  ${dep.latestVersion}`));
+              console.log(chalk.yellow(`Status:  Breaking changes (major update)`));
+            });
+            console.log('');
+          }
+
+          if (grouped.minor?.length) {
+            console.log(chalk.yellow('🟡 Minor Updates Available:'));
+            grouped.minor.forEach(dep => {
+              console.log(chalk.dim('─────────────────────────'));
+              console.log(chalk.bold(dep.name));
+              console.log(chalk.dim(`Current: ${dep.currentVersion}`));
+              console.log(chalk.green(`Latest:  ${dep.latestVersion}`));
+              console.log(chalk.dim(`Status:  New features available`));
+            });
+            console.log('');
+          }
+
+          if (grouped.patch?.length) {
+            console.log(chalk.blue('🔵 Patch Updates Available:'));
+            grouped.patch.forEach(dep => {
+              console.log(chalk.dim('─────────────────────────'));
+              console.log(chalk.bold(dep.name));
+              console.log(chalk.dim(`Current: ${dep.currentVersion}`));
+              console.log(chalk.green(`Latest:  ${dep.latestVersion}`));
+              console.log(chalk.dim(`Status:  Bug fixes available`));
+            });
+            console.log('');
+          }
+
+          // Print summary
+          console.log(chalk.dim('─────────────────────────'));
+          console.log('\n📊 Summary:');
+          console.log(chalk.dim('──────────'));
+          if (grouped.major) console.log(chalk.red(`Major updates: ${grouped.major.length}`));
+          if (grouped.minor) console.log(chalk.yellow(`Minor updates: ${grouped.minor.length}`));
+          if (grouped.patch) console.log(chalk.blue(`Patch updates: ${grouped.patch.length}`));
+          console.log(chalk.dim(`\nTotal packages checked: ${depsCount}`));
+          console.log(chalk.dim(`Updates needed: ${results.length}`));
       }
 
-      spinner.succeed('Scan complete!');
+      console.log('\n');
+      spinner.succeed('Scan complete! 🎉');
+
     } catch (error) {
+      debugLog('Scan failed with error:', error);
       spinner.fail(chalk.red(`Scan failed: ${error.message}`));
-      if (process.env.DEBUG) {
-        console.error(error);
-      }
       process.exit(1);
     }
   });
 
+// Function to read and parse package.json
+async function readPackageJson(projectPath) {
+  try {
+    const packageJsonPath = path.join(projectPath, 'package.json');
+    const packageJsonContent = await fs.readFile(packageJsonPath, 'utf8');
+    return JSON.parse(packageJsonContent);
+  } catch (error) {
+    throw new Error(`Failed to read or parse package.json: ${error.message}`);
+  }
+}
+
+// Function to analyze the dependency tree
+async function analyzeDependencyTree(projectPath) {
+  try {
+    const packageJson = await readPackageJson(projectPath);
+    const dependencies = {
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies
+    };
+
+    const tree = {};
+    for (const [name, version] of Object.entries(dependencies)) {
+      try {
+        const depPackageJsonPath = path.join(projectPath, 'node_modules', name, 'package.json');
+        const depPackageJsonContent = await fs.readFile(depPackageJsonPath, 'utf8');
+        const depPackageJson = JSON.parse(depPackageJsonContent);
+        tree[name] = Object.keys(depPackageJson.dependencies || {});
+      } catch (error) {
+        tree[name] = [];
+      }
+    }
+
+    return tree;
+  } catch (error) {
+    throw new Error(`Failed to analyze dependency tree: ${error.message}`);
+  }
+}
+
 // Function to perform the dependency scan
 async function performDependencyScan(dependencies) {
-  // Implement the logic to scan dependencies
-  // This could involve checking for outdated packages, vulnerabilities, etc.
   const results = [];
+  const spinner = ora('Analyzing dependencies...').start();
+  let count = 0;
+  const total = Object.keys(dependencies).length;
+
   for (const [name, version] of Object.entries(dependencies)) {
-    // Example: Check for outdated packages
-    const latestVersion = await getLatestVersion(name);
-    if (semver.lt(version, latestVersion)) {
-      results.push({
-        name,
-        currentVersion: version,
-        latestVersion,
-        status: 'outdated'
-      });
+    count++;
+    spinner.text = `Scanning ${name} (${count}/${total})`;
+    
+    try {
+      const latestVersion = await getLatestVersion(name);
+      if (semver.lt(version.replace(/^\^|~/, ''), latestVersion)) {
+        const diff = semver.diff(version.replace(/^\^|~/, ''), latestVersion);
+        results.push({
+          name,
+          currentVersion: version,
+          latestVersion,
+          status: diff || 'outdated',
+          updateType: diff
+        });
+      }
+    } catch (error) {
+      spinner.warn(`Failed to check ${name}: ${error.message}`);
     }
   }
+
+  spinner.stop();
   return results;
 }
 
-// Function to convert results to CSV
+// Add these functions back for the scan command
 function convertResultsToCSV(results) {
   const headers = ['Name', 'Current Version', 'Latest Version', 'Status'];
   const rows = results.map(r => [r.name, r.currentVersion, r.latestVersion, r.status]);
   return [headers, ...rows].map(row => row.join(',')).join('\n');
 }
 
-// Function to convert results to HTML
 function convertResultsToHTML(results) {
   const rows = results.map(r => `
     <tr>
@@ -324,21 +471,44 @@ function convertResultsToHTML(results) {
       <td>${r.status}</td>
     </tr>
   `).join('');
+  
   return `
     <table>
-      <thead>
-        <tr>
+    <thead>
+      <tr>
           <th>Name</th>
           <th>Current Version</th>
           <th>Latest Version</th>
           <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
+      </tr>
+    </thead>
+    <tbody>
         ${rows}
-      </tbody>
-    </table>
+    </tbody>
+  </table>
   `;
+}
+
+// Add this helper function if it's not already present
+async function getLatestVersion(packageName) {
+  try {
+    const cacheKey = `latest-version-${packageName}`;
+    const cachedVersion = registryCache.get(cacheKey);
+    
+    if (cachedVersion) {
+      cacheHits++;
+      return cachedVersion;
+    }
+
+    cacheMisses++;
+    const response = await axios.get(`https://registry.npmjs.org/${packageName}/latest`);
+    const version = response.data.version;
+    
+    registryCache.set(cacheKey, version);
+    return version;
+  } catch (error) {
+    throw new Error(`Failed to get latest version: ${error.message}`);
+  }
 }
 
 program
@@ -668,7 +838,7 @@ class InteractiveMode {
       }
     });
   }
-
+  
   getStatusWeight(pkg) {
     const weights = {
       'major': 4,
@@ -980,8 +1150,8 @@ class InteractiveMode {
     this.render();
 
     try {
-      const response = await axios.get(`https://registry.npmjs.org/${pkg.name}/${pkg.currentVersion}`);
-      const deps = response.data.dependencies || {};
+      const response = await axios.get(`https://registry.npmjs.org/${pkg.name}`);
+      const deps = response.data.versions[response.data['dist-tags'].latest].dependencies || {};
       await this.showScrollableContent(
         `Dependencies for ${pkg.name}@${pkg.currentVersion}`,
         Object.entries(deps)
@@ -998,9 +1168,9 @@ class InteractiveMode {
     if (!pkg.vulnCount) {
       this.lastAction = '✅ No known vulnerabilities';
       this.render();
-      return;
-    }
-
+        return;
+      }
+      
     try {
       const vulns = await this.getVulnerabilityDetails(pkg.name);
       await this.showScrollableContent(
@@ -1078,7 +1248,7 @@ program
       await interactive.start();
     } catch (error) {
       console.error(chalk.red('Error in interactive mode:', error.message));
-  process.exit(1);
+      process.exit(1);
     }
   });
 
@@ -2070,38 +2240,6 @@ async function loadConfig() {
   }
 }
 
-// Function to analyze the dependency tree
-async function analyzeDependencyTree(projectPath) {
-  try {
-    // First read package.json to get dependencies
-    const packageJson = await readPackageJson(projectPath);
-    const dependencies = {
-      ...packageJson.dependencies,
-      ...packageJson.devDependencies
-    };
-
-    // Create a simple tree structure from package.json
-    const tree = {};
-    
-    // Get installed dependencies from node_modules
-    for (const [name, version] of Object.entries(dependencies)) {
-      try {
-        const depPackageJsonPath = path.join(projectPath, 'node_modules', name, 'package.json');
-        const depPackageJson = JSON.parse(await fs.readFile(depPackageJsonPath, 'utf8'));
-        
-        tree[name] = Object.keys(depPackageJson.dependencies || {});
-      } catch (error) {
-        // If we can't read the dependency's package.json, just mark it as a leaf node
-        tree[name] = [];
-      }
-    }
-
-    return tree;
-  } catch (error) {
-    throw new Error(`Failed to analyze dependency tree: ${error.message}`);
-  }
-}
-
 // Function to detect circular dependencies
 function detectCircularDependencies(tree) {
   const visited = new Map();
@@ -2172,3 +2310,13 @@ function detectDuplicateDependencies(dependencies) {
 
   return duplicates;
 }
+
+// Add debug logging
+const DEBUG = process.env.DEBUG || false;
+const debugLog = (...args) => DEBUG && console.log(...args);
+
+// At the start of the file, after imports
+debugLog('Starting dependency-guardian...');
+
+// Make sure to add this at the end of the file
+program.parse(process.argv);
