@@ -1,6 +1,6 @@
 {
   "name": "dependency-guardian",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "A powerful dependency management and analysis tool for Node.js projects",
   "main": "src/index.js",
   "bin": {

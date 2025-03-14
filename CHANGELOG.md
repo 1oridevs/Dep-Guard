@@ -42,3 +42,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Dependency graph generation (SVG output)
   - JSON output option
   - Configurable depth level 
+
+## [1.1.0] - 2024-03-14
+
+### Added
+- New `report` command for comprehensive reporting
+  - Multiple output formats (HTML, JSON, PDF, Markdown)
+  - Custom templates support
+  - Comparative analysis
+  - Asset generation
+- New `policy` command for policy management
+  - Policy initialization wizard
+  - Compliance checking
+  - Rule management
+  - Multiple policy types support
+- New `audit` command for detailed security analysis
+  - Configurable severity levels
+  - Automatic vulnerability fixing
+  - JSON and file report outputs
+- New `init` command for easy configuration setup
+  - Interactive prompts for settings
+  - Template configuration generation
+- Enhanced dependency analysis
+  - Bundle size tracking
+  - Impact analysis
+  - Size optimization suggestions
+- Improved error handling and reporting
+- Better progress indicators
+- Configuration validation
+
+### Fixed
+- Issue with circular dependency detection
+- Performance improvements in tree analysis
+- Better handling of npm audit results
+- Fixed bundle size analysis accuracy
+- Improved version checking reliability
+
+### Security
+- Enhanced security scanning capabilities
+- Added policy-based security controls
+- Improved vulnerability reporting

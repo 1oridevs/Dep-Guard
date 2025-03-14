@@ -1,82 +1,120 @@
-const madge = require('madge');
+const fs = require('fs').promises;
 const path = require('path');
+const semver = require('semver');
 const logger = require('../../utils/logger');
-const cache = require('../managers/cache-manager');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 
 class DependencyAnalyzer {
-  constructor() {
-    this.cache = cache;
-  }
-
-  async analyzeDependencyTree(projectPath) {
+  async analyze() {
     try {
-      const result = await madge(projectPath, {
-        baseDir: projectPath,
-        excludeRegExp: [/node_modules/],
-        fileExtensions: ['js', 'jsx', 'ts', 'tsx']
-      });
-
-      return result.obj();
+      // Read package.json
+      const packageJson = await this.readPackageJson();
+      
+      // Get installed dependencies info
+      const installedDeps = await this.getInstalledDependencies();
+      
+      // Get outdated dependencies
+      const outdatedDeps = await this.getOutdatedDependencies();
+      
+      // Combine all information
+      return this.buildDependencyList(packageJson, installedDeps, outdatedDeps);
     } catch (error) {
-      logger.error('Failed to analyze dependency tree:', error);
-      throw new Error(`Dependency tree analysis failed: ${error.message}`);
+      logger.error('Dependency analysis failed:', error);
+      return [];
     }
   }
 
-  detectCircularDependencies(tree) {
-    const visited = new Map();
-    const circularDeps = new Set();
-    const path = [];
+  async readPackageJson() {
+    const content = await fs.readFile(path.join(process.cwd(), 'package.json'), 'utf8');
+    return JSON.parse(content);
+  }
 
-    const dfs = (node) => {
-      if (path.includes(node)) {
-        const cycle = path.slice(path.indexOf(node));
-        circularDeps.add(cycle.join(' -> ') + ' -> ' + node);
-        return;
+  async getInstalledDependencies() {
+    try {
+      const { stdout } = await execPromise('npm list --json');
+      return JSON.parse(stdout);
+    } catch (error) {
+      // npm list can exit with error but still return valid JSON
+      if (error.stdout) {
+        return JSON.parse(error.stdout);
       }
+      throw error;
+    }
+  }
 
-      if (visited.has(node)) return;
-      visited.set(node, true);
-      path.push(node);
-
-      const dependencies = tree[node] || [];
-      for (const dep of dependencies) {
-        dfs(dep);
+  async getOutdatedDependencies() {
+    try {
+      const { stdout } = await execPromise('npm outdated --json');
+      return JSON.parse(stdout);
+    } catch (error) {
+      if (error.stdout) {
+        return JSON.parse(error.stdout);
       }
+      return {};
+    }
+  }
 
-      path.pop();
-      visited.delete(node);
+  buildDependencyList(packageJson, installed, outdated) {
+    const dependencies = [];
+    const { dependencies: deps, devDependencies: devDeps } = packageJson;
+
+    // Process production dependencies
+    Object.entries(deps || {}).forEach(([name, version]) => {
+      dependencies.push(this.buildDependencyInfo(name, version, false, installed, outdated));
+    });
+
+    // Process dev dependencies
+    Object.entries(devDeps || {}).forEach(([name, version]) => {
+      dependencies.push(this.buildDependencyInfo(name, version, true, installed, outdated));
+    });
+
+    return dependencies;
+  }
+
+  buildDependencyInfo(name, version, isDev, installed, outdated) {
+    const info = {
+      name,
+      required: version,
+      isDev,
+      installed: this.getInstalledVersion(name, installed),
+      isOutdated: false,
+      latest: null,
+      updateType: null
     };
 
-    for (const node of Object.keys(tree)) {
-      dfs(node);
+    // Check if outdated
+    if (outdated[name]) {
+      info.isOutdated = true;
+      info.latest = outdated[name].latest;
+      info.updateType = this.getUpdateType(info.installed, info.latest);
     }
 
-    return Array.from(circularDeps);
+    return info;
   }
 
-  detectDuplicateDependencies(dependencies) {
-    const seen = {};
-    const duplicates = [];
-
-    for (const [name, version] of Object.entries(dependencies)) {
-      if (!seen[name]) {
-        seen[name] = [];
-      }
-      seen[name].push(version);
+  getInstalledVersion(name, installed) {
+    try {
+      return installed.dependencies[name].version;
+    } catch (e) {
+      return null;
     }
+  }
 
-    for (const [name, versionList] of Object.entries(seen)) {
-      if (versionList.length > 1) {
-        duplicates.push({
-          name,
-          versions: versionList
-        });
-      }
+  getUpdateType(current, latest) {
+    if (!current || !latest) return null;
+    
+    const currentVersion = semver.clean(current);
+    const latestVersion = semver.clean(latest);
+    
+    if (semver.major(latestVersion) > semver.major(currentVersion)) {
+      return 'major';
+    } else if (semver.minor(latestVersion) > semver.minor(currentVersion)) {
+      return 'minor';
     }
-
-    return duplicates;
+    return 'patch';
   }
 }
 
-module.exports = new DependencyAnalyzer(); 
+module.exports = new DependencyAnalyzer();

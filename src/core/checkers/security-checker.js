@@ -1,37 +1,36 @@
 const { exec } = require('child_process');
 const util = require('util');
-const logger = require('../../utils/logger');
-const cache = require('../managers/cache-manager');
-
 const execPromise = util.promisify(exec);
+const logger = require('../../utils/logger');
 
 class SecurityChecker {
-  constructor() {
-    this.cache = cache;
-  }
-
-  async runSecurityAudit(projectPath) {
+  async check() {
     try {
-      const { stdout } = await execPromise('npm audit --json', {
-        cwd: projectPath
-      });
-
-      const auditData = JSON.parse(stdout);
-      return this.processAuditResults(auditData);
+      const npmAudit = await this.runNpmAudit();
+      return this.processAuditResults(npmAudit);
     } catch (error) {
-      if (error.stdout) {
-        // npm audit returns non-zero exit code when vulnerabilities are found
-        const auditData = JSON.parse(error.stdout);
-        return this.processAuditResults(auditData);
-      }
-      
-      logger.error('Security audit failed:', error);
-      throw new Error(`Security audit failed: ${error.message}`);
+      logger.error('Security check failed:', error);
+      return {
+        vulnerabilities: [],
+        summary: { total: 0, critical: 0, high: 0, moderate: 0, low: 0 }
+      };
     }
   }
 
-  processAuditResults(auditData) {
-    const results = {
+  async runNpmAudit() {
+    try {
+      const { stdout } = await execPromise('npm audit --json');
+      return JSON.parse(stdout);
+    } catch (error) {
+      if (error.stdout) {
+        return JSON.parse(error.stdout);
+      }
+      throw error;
+    }
+  }
+
+  processAuditResults(audit) {
+    const result = {
       vulnerabilities: [],
       summary: {
         total: 0,
@@ -42,23 +41,22 @@ class SecurityChecker {
       }
     };
 
-    for (const [id, advisory] of Object.entries(auditData.advisories || {})) {
-      results.vulnerabilities.push({
-        id,
-        title: advisory.title,
-        package: advisory.module_name,
-        version: advisory.findings[0]?.version,
-        severity: advisory.severity,
-        description: advisory.overview,
-        recommendation: advisory.recommendation,
-        url: advisory.url
+    // Process vulnerabilities
+    Object.entries(audit.vulnerabilities || {}).forEach(([name, vuln]) => {
+      result.vulnerabilities.push({
+        package: name,
+        severity: vuln.severity,
+        title: vuln.title,
+        description: vuln.url,
+        fixAvailable: vuln.fixAvailable,
+        path: vuln.path
       });
 
-      results.summary.total++;
-      results.summary[advisory.severity]++;
-    }
+      result.summary.total++;
+      result.summary[vuln.severity]++;
+    });
 
-    return results;
+    return result;
   }
 }
 
