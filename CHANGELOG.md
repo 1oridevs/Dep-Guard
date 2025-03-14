@@ -27,3 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive security scanning
 - License validation
 - Policy enforcement 
+
+## [1.0.2] - 2024-03-14
+
+### Added
+- New `fix` command to automatically fix dependency issues
+  - Automatic security vulnerability fixes
+  - Safe package updates (patch and minor versions)
+  - Dry-run mode to preview changes
+  - Interactive confirmation prompts 
+- New `tree` command for dependency visualization and analysis
+  - Visual dependency tree display
+  - Circular dependency detection
+  - Duplicate dependency finder
+  - Dependency graph generation (SVG output)
+  - JSON output option
+  - Configurable depth level 
