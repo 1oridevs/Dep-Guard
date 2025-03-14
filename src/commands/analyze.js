@@ -133,42 +133,100 @@ async function analyzeCommand(program, config) {
 }
 
 function displayAnalysis(analysis) {
-  console.log('\nDependency Analysis Report');
-  console.log('========================\n');
+  // Title
+  console.log('\n' + chalk.bold.blue('╭─────────────────────────────────────╮'));
+  console.log(chalk.bold.blue('│      Dependency Guardian Report      │'));
+  console.log(chalk.bold.blue('╰─────────────────────────────────────╯\n'));
 
-  // Summary
-  console.log('Summary:');
-  console.log(`Total Dependencies: ${analysis.summary.total}`);
-  console.log(`Total Issues: ${analysis.summary.issues}`);
-  console.log(`Critical Issues: ${chalk.red(analysis.summary.critical)}\n`);
+  // Quick Stats
+  const stats = [
+    { icon: '📦', label: 'Dependencies', value: analysis.summary.total, color: 'white' },
+    { icon: '⚠️', label: 'Issues', value: analysis.summary.issues, color: 'yellow' },
+    { icon: '🚨', label: 'Critical', value: analysis.summary.critical, color: 'red' }
+  ];
 
-  // Updates
-  console.log('Updates Available:');
-  console.log(`Major: ${chalk.red(analysis.summary.updates.major)}`);
-  console.log(`Minor: ${chalk.yellow(analysis.summary.updates.minor)}`);
-  console.log(`Patch: ${chalk.green(analysis.summary.updates.patch)}`);
-  if (analysis.summary.updates.prerelease > 0) {
-    console.log(`Pre-release: ${chalk.blue(analysis.summary.updates.prerelease)}`);
+  const maxLabelLength = Math.max(...stats.map(s => s.label.length));
+  stats.forEach(stat => {
+    const padding = ' '.repeat(maxLabelLength - stat.label.length);
+    console.log(`${stat.icon}  ${chalk.dim(stat.label + ':')}${padding} ${chalk[stat.color].bold(stat.value)}`);
+  });
+
+  // Updates Overview
+  const updates = analysis.summary.updates;
+  const totalUpdates = updates.major + updates.minor + updates.patch;
+  
+  if (totalUpdates > 0) {
+    console.log('\n' + chalk.bold.yellow('╭─ Available Updates ──────────────────╮'));
+    
+    const updateTypes = [
+      { type: 'major', icon: '⬆️', label: 'Major Updates', color: 'red', count: updates.major },
+      { type: 'minor', icon: '↗️', label: 'Minor Updates', color: 'yellow', count: updates.minor },
+      { type: 'patch', icon: '✨', label: 'Patch Updates', color: 'green', count: updates.patch }
+    ].filter(u => u.count > 0);
+
+    updateTypes.forEach(update => {
+      console.log(`${update.icon}  ${chalk.dim(update.label)}: ${chalk[update.color].bold(update.count)}`);
+    });
+    
+    console.log(chalk.bold.yellow('╰────────────────────────────────────╯'));
   }
-  console.log('');
 
-  // License issues
-  if (analysis.summary.licenses.unknown > 0) {
-    console.log(`Unknown Licenses: ${chalk.yellow(analysis.summary.licenses.unknown)}`);
-  }
+  // Detailed Dependencies Section
+  const depsWithIssues = analysis.dependencies.filter(dep => dep.issues.length > 0);
+  
+  if (depsWithIssues.length > 0) {
+    console.log('\n' + chalk.bold.magenta('╭─ Dependency Details ─────────────────╮'));
+    
+    depsWithIssues.forEach((dep, index) => {
+      // Package name with version
+      console.log(`\n${chalk.bold(dep.name)} ${chalk.dim(`v${dep.version}`)}`);
+      
+      // Update information
+      const updateIssue = dep.issues.find(i => i.type === 'update');
+      if (updateIssue) {
+        const arrow = updateIssue.level === 'high' ? '⬆️' : '↗️';
+        console.log(`${arrow}  ${chalk.dim('Update:')} ${dep.latestVersion} ${chalk.dim('available')}`);
+      }
 
-  // Dependencies with issues
-  if (analysis.dependencies.some(dep => dep.issues.length > 0)) {
-    console.log('\nDependency Details:');
-    analysis.dependencies
-      .filter(dep => dep.issues.length > 0)
-      .forEach(dep => {
-        console.log(`\n${chalk.bold(dep.name)} (${dep.version})`);
-        dep.issues.forEach(issue => {
-          const color = issue.level === 'high' ? 'red' : 'yellow';
-          console.log(chalk[color](`  - [${issue.type}] ${issue.message}`));
-        });
+      // License information
+      const licenseIssue = dep.issues.find(i => i.type === 'license');
+      if (licenseIssue) {
+        console.log(`📜  ${chalk.yellow('License:')} ${licenseIssue.message}`);
+      }
+
+      // Other issues
+      const otherIssues = dep.issues.filter(i => !['update', 'license'].includes(i.type));
+      otherIssues.forEach(issue => {
+        console.log(`❗  ${chalk.red(issue.message)}`);
       });
+
+      // Separator between dependencies
+      if (index < depsWithIssues.length - 1) {
+        console.log(chalk.dim('├' + '─'.repeat(38)));
+      }
+    });
+    
+    console.log(chalk.bold.magenta('\n╰────────────────────────────────────╯'));
+  }
+
+  // Action Items
+  if (analysis.summary.issues > 0) {
+    console.log('\n' + chalk.bold.cyan('╭─ Recommended Actions ────────────────╮'));
+    
+    if (updates.major > 0) {
+      console.log(`🔍  ${chalk.dim('Review')} ${chalk.red.bold(updates.major)} major updates ${chalk.dim('(breaking changes)')}`);
+    }
+    if (updates.minor > 0) {
+      console.log(`📦  ${chalk.dim('Update')} ${chalk.yellow.bold(updates.minor)} packages ${chalk.dim('with new features')}`);
+    }
+    if (updates.patch > 0) {
+      console.log(`🛡️   ${chalk.dim('Apply')} ${chalk.green.bold(updates.patch)} security patches`);
+    }
+    if (analysis.summary.licenses?.unknown > 0) {
+      console.log(`📜  ${chalk.dim('Verify')} ${chalk.yellow.bold(analysis.summary.licenses.unknown)} unknown licenses`);
+    }
+    
+    console.log(chalk.bold.cyan('╰────────────────────────────────────╯\n'));
   }
 }
 
