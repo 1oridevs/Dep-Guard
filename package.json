@@ -1,10 +1,10 @@
 {
   "name": "dependency-guardian",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A powerful dependency management and analysis tool for Node.js projects",
   "main": "src/index.js",
   "bin": {
-    "dependency-guardian": "./src/index.js"
+    "dependency-guardian": "src/index.js"
   },
   "scripts": {
     "test": "jest",
@@ -57,7 +57,9 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "setupFilesAfterEnv": ["<rootDir>/tests/setup.js"],
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setup.js"
+    ],
     "collectCoverageFrom": [
       "src/**/*.js",
       "!src/index.js"
@@ -77,10 +79,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/oridevs/dependency-guardian.git"
+    "url": "git+https://github.com/oridevs/dependency-guardian.git"
   },
   "bugs": {
     "url": "https://github.com/oridevs/dependency-guardian/issues"
   },
-  "homepage": "https://github.com/oridevs/dependency-guardian#readme"
+  "homepage": "https://github.com/oridevs/dependency-guardian#readme",
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ]
 }

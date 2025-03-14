@@ -16,6 +16,7 @@ jest.config.js
 docs/
 CONTRIBUTING.md
 CODE_OF_CONDUCT.md
+# Do NOT ignore the root README.md
 
 # Source files
 src/**/*.test.js
