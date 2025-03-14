@@ -1,12 +1,11 @@
 const ora = require('ora');
 const chalk = require('chalk');
 const path = require('path');
-const dependencyScanner = require('../core/dependency-scanner');
+const dependencyScanner = require('../core/analyzers/dependency-scanner');
 const policyChecker = require('../core/policy-checker');
-const licenseChecker = require('../core/license-checker');
 const logger = require('../utils/logger');
-const { analyzeDependencyTree, detectCircularDependencies } = require('../core/dependency-analyzer');
-const bundleAnalyzer = require('../core/bundle-analyzer');
+const versionUtils = require('../utils/version-utils');
+const licenseUtils = require('../utils/license-utils');
 
 async function analyzeCommand(program, config) {
   program
@@ -14,39 +13,104 @@ async function analyzeCommand(program, config) {
     .description('Perform advanced analysis on dependencies')
     .option('--ci', 'Run in CI mode (exits with error code on issues)')
     .option('--json', 'Output results in JSON format')
+    .option('--dev', 'Include devDependencies in analysis')
     .action(async (options) => {
-      const spinner = ora('Analyzing dependencies...').start();
+      const spinner = ora('Initializing analysis...').start();
       
       try {
-        // Load policy
-        const policy = await policyChecker.loadPolicy(options.policy);
-        
-        // Read package.json
-        const packageJson = await dependencyScanner.readPackageJson(process.cwd());
-        const dependencies = packageJson.dependencies || {};
-        
-        // Analyze dependencies
+        // Initialize license utils first
+        await licenseUtils.init();
+
+        // Create analysis object with initial structure
         const analysis = {
-          dependencies: await analyzeDependencies(dependencies, policy),
-          policy: await validatePolicy(policy),
           summary: {
-            total: Object.keys(dependencies).length,
+            total: 0,
             issues: 0,
-            criticalIssues: 0
-          }
+            critical: 0,
+            updates: {
+              major: 0,
+              minor: 0,
+              patch: 0,
+              prerelease: 0
+            },
+            licenses: {
+              unknown: 0,
+              invalid: 0
+            }
+          },
+          dependencies: []
         };
 
-        // Update summary
-        analysis.dependencies.forEach(dep => {
-          if (dep.issues.length > 0) {
-            analysis.summary.issues += dep.issues.length;
-            if (dep.issues.some(i => i.level === 'high')) {
-              analysis.summary.criticalIssues++;
+        // Read package.json
+        spinner.text = 'Reading package.json...';
+        const packageJson = await dependencyScanner.readPackageJson(process.cwd());
+        const dependencies = {
+          ...packageJson.dependencies,
+          ...(options.dev ? packageJson.devDependencies : {})
+        };
+
+        if (!dependencies || Object.keys(dependencies).length === 0) {
+          spinner.info('No dependencies found');
+          return;
+        }
+
+        // Scan dependencies
+        spinner.text = 'Scanning dependencies...';
+        const results = await dependencyScanner.scanDependencies(dependencies);
+        analysis.summary.total = results.length;
+
+        // Process each dependency
+        spinner.text = 'Analyzing dependencies...';
+        analysis.dependencies = results.map(dep => {
+          const issues = [];
+
+          // Check version
+          if (!dep.version || !versionUtils.parseVersion(dep.version)) {
+            issues.push({
+              type: 'version',
+              level: 'warning',
+              message: `Invalid version format: ${dep.version}`
+            });
+          }
+
+          // Check updates
+          if (dep.updateType && dep.updateType !== 'current') {
+            const level = dep.updateType === 'major' ? 'high' : 'warning';
+            issues.push({
+              type: 'update',
+              level,
+              message: `${dep.updateType} update available (${dep.version} → ${dep.latestVersion})`
+            });
+            if (analysis.summary.updates[dep.updateType] !== undefined) {
+              analysis.summary.updates[dep.updateType]++;
             }
           }
+
+          // Check license
+          if (!dep.license || dep.license === 'UNKNOWN') {
+            issues.push({
+              type: 'license',
+              level: 'warning',
+              message: 'No license information found'
+            });
+            analysis.summary.licenses.unknown++;
+          }
+
+          // Update summary counts
+          analysis.summary.issues += issues.length;
+          analysis.summary.critical += issues.filter(i => i.level === 'high').length;
+
+          return {
+            name: dep.name,
+            version: dep.version,
+            latestVersion: dep.latestVersion,
+            updateType: dep.updateType,
+            license: dep.license,
+            issues
+          };
         });
 
-        spinner.stop();
+        spinner.succeed('Analysis complete!');
 
         // Output results
         if (options.json) {
@@ -55,8 +119,8 @@ async function analyzeCommand(program, config) {
           displayAnalysis(analysis);
         }
 
-        // Exit with error if critical issues found
-        if (analysis.summary.criticalIssues > 0) {
+        // Exit with error code in CI mode if there are critical issues
+        if (options.ci && analysis.summary.critical > 0) {
           process.exit(1);
         }
 
@@ -68,84 +132,43 @@ async function analyzeCommand(program, config) {
     });
 }
 
-async function analyzeDependencies(dependencies, policy) {
-  const results = [];
-
-  for (const [name, version] of Object.entries(dependencies)) {
-    const dep = {
-      name,
-      version,
-      issues: [],
-      license: null,
-      updates: null
-    };
-
-    // Check license
-    const licenseInfo = await licenseChecker.checkLicense(name, version);
-    dep.license = licenseInfo;
-
-    // Check updates
-    const latestVersion = await dependencyScanner.getLatestVersion(name);
-    dep.updates = {
-      latest: latestVersion,
-      type: dependencyScanner.determineUpdateType(version, latestVersion)
-    };
-
-    // Check against policy
-    const policyIssues = await policyChecker.checkDependency({
-      name,
-      version,
-      license: licenseInfo?.name,
-      updateType: dep.updates.type
-    }, policy);
-
-    dep.issues.push(...policyIssues);
-    results.push(dep);
-  }
-
-  return results;
-}
-
-async function validatePolicy(policy) {
-  const validation = await policyChecker.validatePolicy(policy);
-  return {
-    valid: validation.errors.length === 0,
-    errors: validation.errors,
-    warnings: validation.warnings
-  };
-}
-
 function displayAnalysis(analysis) {
-  console.log(chalk.bold('\nDependency Analysis Report'));
-  console.log('=========================');
+  console.log('\nDependency Analysis Report');
+  console.log('========================\n');
 
-  console.log(chalk.bold('\nSummary:'));
+  // Summary
+  console.log('Summary:');
   console.log(`Total Dependencies: ${analysis.summary.total}`);
   console.log(`Total Issues: ${analysis.summary.issues}`);
-  console.log(`Critical Issues: ${chalk.red(analysis.summary.criticalIssues)}`);
+  console.log(`Critical Issues: ${chalk.red(analysis.summary.critical)}\n`);
 
-  if (analysis.dependencies.length > 0) {
-    console.log(chalk.bold('\nDependency Details:'));
-    analysis.dependencies.forEach(dep => {
-      if (dep.issues.length > 0) {
-        console.log(`\n${chalk.yellow(dep.name)} (${dep.version}):`);
-        dep.issues.forEach(issue => {
-          console.log(chalk[issue.level === 'high' ? 'red' : 'yellow'](
-            `  - [${issue.type}] ${issue.message}`
-          ));
-        });
-      }
-    });
+  // Updates
+  console.log('Updates Available:');
+  console.log(`Major: ${chalk.red(analysis.summary.updates.major)}`);
+  console.log(`Minor: ${chalk.yellow(analysis.summary.updates.minor)}`);
+  console.log(`Patch: ${chalk.green(analysis.summary.updates.patch)}`);
+  if (analysis.summary.updates.prerelease > 0) {
+    console.log(`Pre-release: ${chalk.blue(analysis.summary.updates.prerelease)}`);
+  }
+  console.log('');
+
+  // License issues
+  if (analysis.summary.licenses.unknown > 0) {
+    console.log(`Unknown Licenses: ${chalk.yellow(analysis.summary.licenses.unknown)}`);
   }
 
-  if (!analysis.policy.valid) {
-    console.log(chalk.bold('\nPolicy Validation:'));
-    analysis.policy.errors.forEach(error => {
-      console.log(chalk.red(`- ${error}`));
-    });
-    analysis.policy.warnings.forEach(warning => {
-      console.log(chalk.yellow(`- ${warning}`));
-    });
+  // Dependencies with issues
+  if (analysis.dependencies.some(dep => dep.issues.length > 0)) {
+    console.log('\nDependency Details:');
+    analysis.dependencies
+      .filter(dep => dep.issues.length > 0)
+      .forEach(dep => {
+        console.log(`\n${chalk.bold(dep.name)} (${dep.version})`);
+        dep.issues.forEach(issue => {
+          const color = issue.level === 'high' ? 'red' : 'yellow';
+          console.log(chalk[color](`  - [${issue.type}] ${issue.message}`));
+        });
+      });
   }
 }
 

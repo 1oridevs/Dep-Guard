@@ -1,9 +1,10 @@
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
-const semver = require('semver');
 const logger = require('../../utils/logger');
 const cache = require('../managers/cache-manager');
+const versionUtils = require('../../utils/version-utils');
+const licenseUtils = require('../../utils/license-utils');
 
 class DependencyScanner {
   constructor() {
@@ -21,14 +22,29 @@ class DependencyScanner {
     }
   }
 
+  async getPackageInfo(name) {
+    const cacheKey = `npm-pkg-${name}`;
+    const cached = this.cache.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const response = await axios.get(`${this.npmRegistry}/${name}`);
+      this.cache.set(cacheKey, response.data, 3600); // Cache for 1 hour
+      return response.data;
+    } catch (error) {
+      logger.debug(`Failed to fetch package info for ${name}:`, error);
+      return null;
+    }
+  }
+
   async scanDependencies(dependencies) {
     const results = [];
     
     for (const [name, version] of Object.entries(dependencies)) {
       try {
-        // Clean version string (remove ^ or ~ if present)
-        const requestedVersion = version.replace(/[\^~]/g, '');
-        
         // Get package info from npm
         const packageInfo = await this.getPackageInfo(name);
         if (!packageInfo) {
@@ -39,20 +55,17 @@ class DependencyScanner {
         // Get latest version
         const latestVersion = packageInfo['dist-tags']?.latest;
         
-        // Get the exact version info
-        const versionInfo = packageInfo.versions?.[requestedVersion] || packageInfo.versions?.[latestVersion];
-        
         // Get license info
-        const license = versionInfo?.license || packageInfo.license;
+        const licenseInfo = packageInfo.versions?.[latestVersion]?.license || packageInfo.license;
 
         // Create dependency object
         const dep = {
           name,
-          version: requestedVersion,
+          version: version,
+          currentVersion: version.replace(/^[\^~]/, ''),
           latestVersion,
-          currentVersion: requestedVersion,
-          updateType: await this.determineUpdateType(name, requestedVersion, latestVersion),
-          license: license || 'UNKNOWN',
+          updateType: versionUtils.determineUpdateType(version, latestVersion),
+          license: licenseInfo || 'UNKNOWN',
           issues: []
         };
 
@@ -75,78 +88,6 @@ class DependencyScanner {
     }
 
     return results;
-  }
-
-  async getPackageInfo(packageName) {
-    const cacheKey = `npm-info-${packageName}`;
-    const cached = this.cache.get(cacheKey);
-    
-    if (cached) {
-      return cached;
-    }
-
-    try {
-      const response = await axios.get(`${this.npmRegistry}/${packageName}`, {
-        headers: {
-          'Accept': 'application/json'
-        }
-      });
-      
-      if (!response.data) {
-        throw new Error('Empty response from NPM registry');
-      }
-
-      this.cache.set(cacheKey, response.data);
-      return response.data;
-    } catch (error) {
-      logger.debug(`Failed to get package info for ${packageName}:`, error);
-      return null;
-    }
-  }
-
-  async determineUpdateType(packageName, currentVersion, latestVersion) {
-    try {
-      // Handle cases where versions are missing
-      if (!currentVersion || !latestVersion) {
-        return 'unknown';
-      }
-
-      // Clean and parse versions
-      const current = semver.valid(semver.coerce(currentVersion));
-      const latest = semver.valid(semver.coerce(latestVersion));
-
-      if (!current || !latest) {
-        logger.debug(`Invalid version format for ${packageName}: current=${currentVersion}, latest=${latestVersion}`);
-        return 'unknown';
-      }
-
-      // Compare versions
-      if (semver.eq(current, latest)) {
-        return 'current';
-      }
-
-      if (semver.gt(latest, current)) {
-        if (semver.major(latest) > semver.major(current)) {
-          return 'major';
-        }
-        if (semver.minor(latest) > semver.minor(current)) {
-          return 'minor';
-        }
-        if (semver.patch(latest) > semver.patch(current)) {
-          return 'patch';
-        }
-      }
-
-      return 'current';
-    } catch (error) {
-      logger.debug(`Error determining update type for ${packageName} (${currentVersion} -> ${latestVersion}):`, error);
-      return 'unknown';
-    }
-  }
-
-  async getLatestVersion(packageName) {
-    const packageInfo = await this.getPackageInfo(packageName);
-    return packageInfo?.['dist-tags']?.latest || null;
   }
 }
 
