@@ -28,7 +28,10 @@
     "npm",
     "audit"
   ],
-  "author": "",
+  "author": {
+    "name": "Dependency Guardian Team",
+    "email": "oridevs.offical@gmail.com"
+  },
   "license": "MIT",
   "dependencies": {
     "axios": "^1.6.0",
@@ -71,5 +74,13 @@
       "/node_modules/",
       "/fixtures/"
     ]
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oridevs/dependency-guardian.git"
+  },
+  "bugs": {
+    "url": "https://github.com/oridevs/dependency-guardian/issues"
+  },
+  "homepage": "https://github.com/oridevs/dependency-guardian#readme"
 }

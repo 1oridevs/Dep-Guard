@@ -1,0 +1,32 @@
+# Development files
+.git*
+.eslint*
+.prettier*
+.husky
+.vscode
+.idea
+*.log
+
+# Test files
+tests/
+coverage/
+jest.config.js
+
+# Documentation
+docs/
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+
+# Source files
+src/**/*.test.js
+src/**/__tests__/
+src/**/__mocks__/
+
+# Build files
+dist/
+build/
+*.tgz
+
+# Configuration files
+.dependency-guardianrc*
+.env* 
