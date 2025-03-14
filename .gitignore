@@ -1,3 +1,23 @@
+# Reports
+dependency-report.*
+reports/
+.dependency-guardian-policy.json
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory
+coverage/
+
+# Dependencies
 node_modules/
 package-lock.json
 templates

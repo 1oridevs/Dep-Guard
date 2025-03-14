@@ -1,11 +1,31 @@
 # Development files
-.git*
-.eslint*
-.prettier*
-.husky
-.vscode
-.idea
+tests/
+docs/
+.github/
+.vscode/
+.editorconfig
+.eslintrc.js
+.prettierrc
+jest.config.js
+
+# Reports and logs
+reports/
+logs/
+coverage/
 *.log
+
+# Source control
+.git/
+.gitignore
+.npmignore
+
+# CI/CD
+.travis.yml
+.gitlab-ci.yml
+.github/workflows/
+
+# Documentation source
+docs-src/
 
 # Test files
 tests/
@@ -13,7 +33,6 @@ coverage/
 jest.config.js
 
 # Documentation
-docs/
 CONTRIBUTING.md
 CODE_OF_CONDUCT.md
 # Do NOT ignore the root README.md

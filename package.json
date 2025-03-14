@@ -1,6 +1,6 @@
 {
   "name": "dependency-guardian",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "A powerful dependency management and analysis tool for Node.js projects",
   "main": "src/index.js",
   "bin": {
@@ -47,7 +47,10 @@
     "node-cache": "^5.1.2",
     "ora": "^5.4.1",
     "p-limit": "^3.1.0",
-    "semver": "^7.7.1"
+    "semver": "^7.7.1",
+    "webpack": "^5.90.3",
+    "webpack-bundle-analyzer": "^4.10.1",
+    "snyk": "^1.1250.0"
   },
   "devDependencies": {
     "eslint": "^8.57.0",
