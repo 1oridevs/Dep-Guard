@@ -1,0 +1,26 @@
+name: Dependencies
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Run weekly on Monday
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+    - name: Check for updates
+      run: npx npm-check-updates
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v6
+      with:
+        title: 'chore(deps): update dependencies'
+        branch: 'deps/update'
+        commit-message: 'chore(deps): update dependencies'
+        body: 'Updated dependencies to their latest versions'
+        labels: dependencies 

@@ -1,5 +1,11 @@
 # Dependency Guardian
 
+[![Test](https://github.com/oridevs/dependency-guardian/actions/workflows/test.yml/badge.svg)](https://github.com/oridevs/dependency-guardian/actions/workflows/test.yml)
+[![CodeQL](https://github.com/oridevs/dependency-guardian/actions/workflows/codeql.yml/badge.svg)](https://github.com/oridevs/dependency-guardian/actions/workflows/codeql.yml)
+[![npm version](https://badge.fury.io/js/dependency-guardian.svg)](https://badge.fury.io/js/dependency-guardian)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![codecov](https://codecov.io/gh/oridevs/dependency-guardian/branch/main/graph/badge.svg)](https://codecov.io/gh/oridevs/dependency-guardian)
+
 Dependency Guardian is a command-line tool designed to help developers manage their Node.js project dependencies. It scans for outdated packages, checks for security vulnerabilities, and ensures license compliance.
 
 ## Table of Contents
@@ -54,7 +60,7 @@ dependency-guardian ci
 
 ## Configuration
 
-You can customize Dependency Guardian's behavior by creating a `.depguardrc.json` file in your project root. Here’s an example configuration:
+You can customize Dependency Guardian's behavior by creating a `.depguardrc.json` file in your project root. Here's an example configuration:
 
 ```json
 {
