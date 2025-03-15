@@ -5,7 +5,12 @@ const chalk = require('chalk');
 
 class TreeUtils {
   constructor() {
-    this.indent = '  ';
+    this.symbols = {
+      branch: '├── ',
+      lastBranch: '└── ',
+      vertical: '│   ',
+      space: '    '
+    };
   }
 
   async buildDependencyTree(projectPath) {
@@ -50,32 +55,37 @@ class TreeUtils {
     const maxDepth = options.maxDepth || Infinity;
 
     function traverse(node, prefix = '', depth = 0) {
-      if (depth > maxDepth) return;
+      if (!node || depth > maxDepth) return;
 
       // Add root node
       if (depth === 0) {
-        lines.push(node.name);
+        lines.push(node.name || 'root');
       }
 
       // Process children
       if (node.children && depth < maxDepth) {
-        const children = node.children;
+        const children = Array.isArray(node.children) ? node.children : [];
         children.forEach((child, index) => {
           const isLast = index === children.length - 1;
-          const linePrefix = isLast ? '└── ' : '├── ';
-          const childPrefix = isLast ? '    ' : '│   ';
+          const linePrefix = isLast ? this.symbols.lastBranch : this.symbols.branch;
+          const childPrefix = isLast ? this.symbols.space : this.symbols.vertical;
           
-          lines.push(prefix + linePrefix + child.name);
+          lines.push(prefix + linePrefix + (child.name || child));
           
           if (child.children) {
-            traverse(child, prefix + childPrefix, depth + 1);
+            traverse.call(this, child, prefix + childPrefix, depth + 1);
           }
         });
       }
     }
 
-    traverse(tree);
-    return lines.join('\n');
+    try {
+      traverse.call(this, tree);
+      return lines.join('\n');
+    } catch (error) {
+      logger.error('Failed to format tree:', error);
+      throw error;
+    }
   }
 
   colorize(tree, getColor = () => chalk.white) {
@@ -84,6 +94,65 @@ class TreeUtils {
       const [prefix, name] = line.split(/(?<=^[│├└\s]+)/);
       return prefix + getColor(name)(name);
     }).join('\n');
+  }
+
+  buildDependencyTree(dependencies, options = {}) {
+    const tree = {
+      name: options.rootName || 'dependencies',
+      children: []
+    };
+
+    try {
+      Object.entries(dependencies).forEach(([name, version]) => {
+        const parts = name.split('/');
+        let current = tree;
+
+        parts.forEach((part, index) => {
+          const isLast = index === parts.length - 1;
+          let child = current.children.find(c => c.name === part);
+
+          if (!child) {
+            child = {
+              name: part,
+              ...(isLast ? { version } : { children: [] })
+            };
+            current.children.push(child);
+          }
+
+          current = child;
+        });
+      });
+
+      return tree;
+    } catch (error) {
+      logger.error('Failed to build dependency tree:', error);
+      throw error;
+    }
+  }
+
+  flattenTree(tree, parentPath = '') {
+    const result = {};
+
+    try {
+      const traverse = (node, currentPath) => {
+        if (node.version) {
+          result[currentPath] = node.version;
+        }
+
+        if (node.children) {
+          node.children.forEach(child => {
+            const childPath = currentPath ? `${currentPath}/${child.name}` : child.name;
+            traverse(child, childPath);
+          });
+        }
+      };
+
+      traverse(tree, parentPath);
+      return result;
+    } catch (error) {
+      logger.error('Failed to flatten tree:', error);
+      throw error;
+    }
   }
 }
 
