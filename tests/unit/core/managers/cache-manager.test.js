@@ -1,147 +1,82 @@
 const fs = require('fs').promises;
 const path = require('path');
-const CacheManager = require('../../../../src/core/managers/cache-manager');
-const { CacheError } = require('../../../../src/utils/error-utils');
+const cacheManager = require('../../../../src/core/managers/cache-manager');
 
 describe('CacheManager', () => {
-  const testDir = path.join(__dirname, '../../../fixtures/cache-test');
-  const testPath = path.join(testDir, 'test-cache.json');
-  let cacheManager;
-
+  const testDir = '.depguard/test-cache';
+  
   beforeAll(async () => {
-    await fs.mkdir(testDir, { recursive: true });
+    cacheManager.cacheDir = testDir;
+    await cacheManager.init();
   });
 
   afterAll(async () => {
     await fs.rm(testDir, { recursive: true, force: true });
   });
 
-  beforeEach(() => {
-    cacheManager = new CacheManager({
-      ttl: 100,
-      persistPath: testPath
-    });
-  });
-
   afterEach(async () => {
-    try {
-      await fs.unlink(testPath);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
+    await cacheManager.clear();
   });
 
-  describe('Basic Operations', () => {
-    it('should get and set values', () => {
-      cacheManager.set('test', 'value');
-      expect(cacheManager.get('test')).toBe('value');
-    });
+  test('should store and retrieve values', async () => {
+    const key = 'test-key';
+    const value = { data: 'test-value' };
 
-    it('should handle cache misses', () => {
-      expect(cacheManager.get('nonexistent')).toBeUndefined();
-    });
+    await cacheManager.set(key, value);
+    const retrieved = await cacheManager.get(key);
 
-    it('should respect TTL', async () => {
-      cacheManager.set('test', 'value', 1); // 1 second TTL
-      await new Promise(resolve => setTimeout(resolve, 1100));
-      expect(cacheManager.get('test')).toBeUndefined();
-    });
+    expect(retrieved).toEqual(value);
   });
 
-  describe('Async Operations', () => {
-    it('should handle async fetch function', async () => {
-      const fetchFn = jest.fn().mockResolvedValue('fetched');
-      const value = await cacheManager.get('test', fetchFn);
-      expect(value).toBe('fetched');
-      expect(fetchFn).toHaveBeenCalled();
-    });
+  test('should handle cache expiration', async () => {
+    const key = 'expiring-key';
+    const value = { data: 'expiring-value' };
 
-    it('should cache async results', async () => {
-      const fetchFn = jest.fn().mockResolvedValue('fetched');
-      await cacheManager.get('test', fetchFn);
-      await cacheManager.get('test', fetchFn);
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-    });
-
-    it('should handle fetch errors', async () => {
-      const fetchFn = jest.fn().mockRejectedValue(new Error('Fetch failed'));
-      await expect(cacheManager.get('test', fetchFn))
-        .rejects
-        .toThrow('Fetch failed');
-    });
+    await cacheManager.set(key, value, 100); // 100ms TTL
+    await new Promise(resolve => setTimeout(resolve, 150));
+    
+    const retrieved = await cacheManager.get(key);
+    expect(retrieved).toBeNull();
   });
 
-  describe('Persistence', () => {
-    it('should persist cache to disk', async () => {
-      await cacheManager.set('test', 'value');
-      await cacheManager.persistCache();
-      
-      const data = await fs.readFile(testPath, 'utf8');
-      const cached = JSON.parse(data);
-      expect(cached).toHaveProperty('test', 'value');
-    });
+  test('should delete cached values', async () => {
+    const key = 'delete-key';
+    const value = { data: 'delete-value' };
 
-    it('should load persisted cache', async () => {
-      const data = { test: 'value' };
-      await fs.writeFile(testPath, JSON.stringify(data));
-      
-      const newCache = new CacheManager({ persistPath: testPath });
-      await new Promise(resolve => setTimeout(resolve, 100)); // Wait for async load
-      
-      expect(newCache.get('test')).toBe('value');
-    });
+    await cacheManager.set(key, value);
+    await cacheManager.delete(key);
+    
+    const retrieved = await cacheManager.get(key);
+    expect(retrieved).toBeNull();
   });
 
-  describe('Batch Operations', () => {
-    it('should handle multiple gets', async () => {
-      const fetchFn = jest.fn().mockResolvedValue({
-        'key1': 'value1',
-        'key2': 'value2'
-      });
+  test('should clear all cached values', async () => {
+    const keys = ['key1', 'key2', 'key3'];
+    const value = { data: 'test' };
 
-      const results = await cacheManager.mget(['key1', 'key2'], fetchFn);
-      expect(results).toEqual({
-        'key1': 'value1',
-        'key2': 'value2'
-      });
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-    });
+    await Promise.all(keys.map(key => cacheManager.set(key, value)));
+    await cacheManager.clear();
 
-    it('should handle partial cache hits', async () => {
-      cacheManager.set('key1', 'cached');
-      const fetchFn = jest.fn().mockResolvedValue({
-        'key2': 'fetched'
-      });
-
-      const results = await cacheManager.mget(['key1', 'key2'], fetchFn);
-      expect(results).toEqual({
-        'key1': 'cached',
-        'key2': 'fetched'
-      });
-    });
+    const results = await Promise.all(keys.map(key => cacheManager.get(key)));
+    expect(results.every(result => result === null)).toBe(true);
   });
 
-  describe('Statistics', () => {
-    it('should track hits and misses', async () => {
-      cacheManager.set('test', 'value');
-      cacheManager.get('test');
-      cacheManager.get('missing');
+  test('should cleanup expired entries', async () => {
+    const keys = {
+      fresh: { ttl: 1000 * 60 }, // 1 minute
+      expired: { ttl: 100 } // 100ms
+    };
 
-      const stats = cacheManager.getStats();
-      expect(stats.hits).toBe(1);
-      expect(stats.misses).toBe(1);
-    });
+    await Promise.all(
+      Object.entries(keys).map(([key, { ttl }]) => 
+        cacheManager.set(key, { data: key }, ttl)
+      )
+    );
 
-    it('should track errors', async () => {
-      const fetchFn = jest.fn().mockRejectedValue(new Error('Fetch failed'));
-      try {
-        await cacheManager.get('test', fetchFn);
-      } catch (error) {
-        // Ignore error
-      }
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await cacheManager.cleanup();
 
-      const stats = cacheManager.getStats();
-      expect(stats.errors).toBe(1);
-    });
+    expect(await cacheManager.get('fresh')).toBeTruthy();
+    expect(await cacheManager.get('expired')).toBeNull();
   });
 }); 
