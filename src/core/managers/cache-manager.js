@@ -1,39 +1,138 @@
-const NodeCache = require('node-cache');
-const logger = require('../../utils/logger');
 const fs = require('fs').promises;
+const path = require('path');
+const crypto = require('crypto');
+const logger = require('../../utils/logger');
 const { CacheError } = require('../../utils/error-utils');
 
 class CacheManager {
   constructor(options = {}) {
-    this.cache = new NodeCache({
-      stdTTL: options.ttl || 3600, // 1 hour default
-      checkperiod: 120, // Check for expired keys every 2 minutes
-      useClones: false,
-      maxKeys: options.maxKeys || -1 // Unlimited by default
-    });
-
-    this.persistPath = options.persistPath;
+    this.cacheDir = options.cacheDir || '.depguard/cache';
+    this.maxAge = options.maxAge || 24 * 60 * 60 * 1000; // 24 hours
+    this.initialized = false;
     this.hits = 0;
     this.misses = 0;
     this.errors = 0;
 
     // Load persisted cache if available
-    if (this.persistPath) {
-      this.loadPersistedCache();
+    if (options.persistPath) {
+      this.loadPersistedCache(options.persistPath);
     }
-
-    this.cache.on('expired', (key, value) => {
-      logger.debug(`Cache entry expired: ${key}`);
-    });
-
-    this.cache.on('flush', () => {
-      logger.debug('Cache flushed');
-    });
   }
 
-  async loadPersistedCache() {
+  async init() {
+    if (this.initialized) return;
+
     try {
-      const data = await fs.readFile(this.persistPath, 'utf8');
+      await fs.mkdir(this.cacheDir, { recursive: true });
+      this.initialized = true;
+    } catch (error) {
+      logger.error('Failed to initialize cache directory:', error);
+      throw error;
+    }
+  }
+
+  generateKey(data) {
+    const hash = crypto.createHash('sha256');
+    hash.update(JSON.stringify(data));
+    return hash.digest('hex');
+  }
+
+  async set(key, value, ttl = this.maxAge) {
+    await this.init();
+
+    const cacheData = {
+      value,
+      expires: Date.now() + ttl
+    };
+
+    const cacheKey = this.generateKey(key);
+    const cachePath = path.join(this.cacheDir, `${cacheKey}.json`);
+
+    try {
+      await fs.writeFile(cachePath, JSON.stringify(cacheData));
+      return true;
+    } catch (error) {
+      logger.error('Cache write failed:', error);
+      return false;
+    }
+  }
+
+  async get(key) {
+    await this.init();
+
+    const cacheKey = this.generateKey(key);
+    const cachePath = path.join(this.cacheDir, `${cacheKey}.json`);
+
+    try {
+      const data = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+      
+      if (Date.now() > data.expires) {
+        await this.delete(key);
+        return null;
+      }
+
+      this.hits++;
+      return data.value;
+    } catch (error) {
+      this.misses++;
+      return null;
+    }
+  }
+
+  async delete(key) {
+    const cacheKey = this.generateKey(key);
+    const cachePath = path.join(this.cacheDir, `${cacheKey}.json`);
+
+    try {
+      await fs.unlink(cachePath);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async clear() {
+    try {
+      const files = await fs.readdir(this.cacheDir);
+      await Promise.all(
+        files.map(file => fs.unlink(path.join(this.cacheDir, file)))
+      );
+      return true;
+    } catch (error) {
+      logger.error('Cache clear failed:', error);
+      return false;
+    }
+  }
+
+  async cleanup() {
+    try {
+      const files = await fs.readdir(this.cacheDir);
+      const now = Date.now();
+
+      await Promise.all(
+        files.map(async file => {
+          const filePath = path.join(this.cacheDir, file);
+          try {
+            const data = JSON.parse(await fs.readFile(filePath, 'utf8'));
+            if (now > data.expires) {
+              await fs.unlink(filePath);
+            }
+          } catch (error) {
+            // Delete corrupted cache files
+            await fs.unlink(filePath);
+          }
+        })
+      );
+      return true;
+    } catch (error) {
+      logger.error('Cache cleanup failed:', error);
+      return false;
+    }
+  }
+
+  async loadPersistedCache(persistPath) {
+    try {
+      const data = await fs.readFile(persistPath, 'utf8');
       const cached = JSON.parse(data);
       Object.entries(cached).forEach(([key, value]) => {
         this.set(key, value);
@@ -51,9 +150,14 @@ class CacheManager {
     
     try {
       const data = {};
-      this.cache.keys().forEach(key => {
-        data[key] = this.cache.get(key);
-      });
+      const files = await fs.readdir(this.cacheDir);
+      await Promise.all(
+        files.map(async file => {
+          const filePath = path.join(this.cacheDir, file);
+          const cached = JSON.parse(await fs.readFile(filePath, 'utf8'));
+          data[file.split('.')[0]] = cached.value;
+        })
+      );
       await fs.writeFile(this.persistPath, JSON.stringify(data));
       logger.debug('Persisted cache to disk');
     } catch (error) {
@@ -62,78 +166,27 @@ class CacheManager {
     }
   }
 
-  async get(key, fetchFn) {
-    const cached = this.cache.get(key);
-    if (cached !== undefined) {
-      logger.debug(`Cache hit: ${key}`);
-      this.hits++;
-      return cached;
-    }
-
-    logger.debug(`Cache miss: ${key}`);
-    this.misses++;
-    try {
-      const value = await fetchFn();
-      this.set(key, value);
-      if (this.persistPath) {
-        await this.persistCache();
-      }
-      return value;
-    } catch (error) {
-      this.errors++;
-      logger.error(`Failed to fetch data for cache key ${key}:`, error.message);
-      throw error;
-    }
-  }
-
-  set(key, value, ttl) {
-    return this.cache.set(key, value, ttl);
-  }
-
-  del(key) {
-    return this.cache.del(key);
-  }
-
-  flush() {
-    return this.cache.flushAll();
-  }
-
-  stats() {
-    return this.cache.getStats();
-  }
-
-  getStats() {
-    return {
-      hits: this.hits,
-      misses: this.misses,
-      errors: this.errors,
-      keys: this.cache.keys().length,
-      ...this.cache.getStats()
-    };
-  }
-
   async mget(keys, fetchFn) {
     const results = {};
     const missingKeys = [];
 
-    keys.forEach(key => {
-      const cached = this.cache.get(key);
-      if (cached !== undefined) {
+    await Promise.all(keys.map(async key => {
+      const cached = await this.get(key);
+      if (cached !== null) {
         results[key] = cached;
         this.hits++;
       } else {
         missingKeys.push(key);
         this.misses++;
       }
-    });
+    }));
 
     if (missingKeys.length > 0) {
       try {
         const values = await fetchFn(missingKeys);
-        Object.entries(values).forEach(([key, value]) => {
-          results[key] = value;
-          this.set(key, value);
-        });
+        await Promise.all(
+          Object.entries(values).map(([key, value]) => this.set(key, value))
+        );
       } catch (error) {
         this.errors++;
         throw new CacheError('Failed to fetch multiple values', { 
@@ -144,6 +197,25 @@ class CacheManager {
     }
 
     return results;
+  }
+
+  stats() {
+    return {
+      hits: this.hits,
+      misses: this.misses,
+      errors: this.errors,
+      keys: this.cacheDir.split('/').length,
+      maxAge: this.maxAge,
+      ...this.cacheDir.split('/').reduce((acc, dir) => {
+        acc[dir] = {
+          hits: 0,
+          misses: 0,
+          errors: 0,
+          keys: 0
+        };
+        return acc;
+      }, {})
+    };
   }
 }
 
