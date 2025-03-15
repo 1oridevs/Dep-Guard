@@ -4,8 +4,10 @@
   <img src="assets/logo.svg" width="200" height="200" alt="Dependency Guardian Logo">
 </p>
 
-[![npm version](https://badge.fury.io/js/dependency-guardian.svg)](https://badge.fury.io/js/dependency-guardian)
+[![npm](https://img.shields.io/npm/v/dependency-guardian.svg)](https://www.npmjs.com/package/dependency-guardian)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![npm downloads](https://img.shields.io/npm/dm/dependency-guardian.svg)](https://www.npmjs.com/package/dependency-guardian)
+[![Node.js Version](https://img.shields.io/node/v/dependency-guardian.svg)](https://nodejs.org)
 
 Dependency Guardian is a command-line tool designed to help developers manage their Node.js project dependencies. It scans for outdated packages, checks for security vulnerabilities, and ensures license compliance.
 
