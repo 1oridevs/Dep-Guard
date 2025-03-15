@@ -56,121 +56,86 @@ class DependencyScanner {
     throw lastError;
   }
 
-  async readPackageJson(projectPath) {
+  async readPackageJson(projectPath = process.cwd()) {
     try {
-      const content = await fs.readFile(path.join(projectPath || process.cwd(), 'package.json'), 'utf8');
-      const packageJson = JSON.parse(content);
-      
-      // Validate package.json structure
-      if (!packageJson || typeof packageJson !== 'object') {
-        throw new Error('Invalid package.json format');
-      }
-      
-      // Validate dependencies
-      if (packageJson.dependencies && typeof packageJson.dependencies !== 'object') {
-        throw new Error('Invalid dependencies format in package.json');
-      }
-      
-      // Validate devDependencies
-      if (packageJson.devDependencies && typeof packageJson.devDependencies !== 'object') {
-        throw new Error('Invalid devDependencies format in package.json');
-      }
-      
-      return packageJson;
+      const content = await fs.readFile(path.join(projectPath, 'package.json'), 'utf8');
+      return JSON.parse(content);
     } catch (error) {
-      if (error.code === 'ENOENT') {
-        throw new Error('Could not find package.json');
-      }
-      if (error instanceof SyntaxError) {
-        throw new Error('Invalid JSON in package.json');
-      }
-      logger.error('Failed to read package.json:', error);
-      throw new Error('Could not read package.json');
+      throw new Error(`Failed to read package.json: ${error.message}`);
     }
   }
 
   async getPackageInfo(packageName) {
     const cacheKey = `pkg:${this.npmRegistry}/${packageName}`;
-    return this.cache.get(cacheKey, async () => {
-      try {
-        const response = await this.retryOperation(() => 
-          axios.get(`${this.npmRegistry}/${packageName}`, {
-            timeout: this.timeout,
-            headers: {
-              'User-Agent': 'dependency-guardian'
-            }
-          })
-        );
-        return response.data;
-      } catch (error) {
-        if (error.response?.status === 404) {
-          return null;
-        }
-        throw new Error(`Failed to fetch package info: ${error.message}`);
-      }
-    });
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const response = await axios.get(`${this.npmRegistry}/${packageName}`);
+      const data = response.data;
+
+      const info = {
+        latest: data['dist-tags'].latest,
+        versions: Object.keys(data.versions),
+        license: data.license,
+        deprecated: data.deprecated,
+        homepage: data.homepage
+      };
+
+      this.cache.set(cacheKey, info);
+      return info;
+    } catch (error) {
+      throw new NetworkError(`Failed to fetch package info: ${error.message}`, {
+        package: packageName,
+        registry: this.npmRegistry
+      });
+    }
   }
 
   getUpdateType(currentVersion, latestVersion) {
     return versionUtils.determineUpdateType(currentVersion, latestVersion);
   }
 
-  async scanDependencies(dependencies) {
-    const results = [];
-    const packageNames = Object.keys(dependencies);
-    
+  async scanDependencies(projectPath = process.cwd()) {
     try {
-      const packageInfos = await this.cache.mget(
-        packageNames.map(name => `pkg:${this.npmRegistry}/${name}`),
-        async (missingKeys) => {
-          const infos = {};
-          for (const key of missingKeys) {
-            const name = key.split('/').pop();
-            try {
-              const info = await this.getPackageInfo(name);
-              infos[key] = info;
-            } catch (error) {
-              if (error.response?.status === 404) {
-                infos[key] = null;
-              } else {
-                throw error;
-              }
-            }
-          }
-          return infos;
-        }
-      );
+      // Read package.json first
+      const packageJson = await this.readPackageJson(projectPath);
+      const dependencies = {
+        ...packageJson.dependencies,
+        ...packageJson.devDependencies
+      };
 
+      if (Object.keys(dependencies).length === 0) {
+        logger.info('No dependencies found in package.json');
+        return {};
+      }
+
+      const results = {};
       for (const [name, version] of Object.entries(dependencies)) {
-        const packageInfo = packageInfos[`pkg:${this.npmRegistry}/${name}`];
-        if (!packageInfo) {
-          results.push({
-            name,
-            version,
-            error: 'Package not found'
-          });
-          continue;
-        }
-
         try {
-          const result = await this.analyzeDependency(name, version, packageInfo);
-          results.push(result);
+          const info = await this.getPackageInfo(name);
+          results[name] = {
+            currentVersion: version,
+            latestVersion: info.latest,
+            versions: info.versions,
+            license: info.license,
+            deprecated: info.deprecated,
+            homepage: info.homepage
+          };
         } catch (error) {
-          results.push({
-            name,
-            version,
+          logger.debug(`Failed to get info for ${name}:`, error);
+          results[name] = {
+            currentVersion: version,
             error: error.message
-          });
+          };
         }
       }
-    } catch (error) {
-      throw new NetworkError('Failed to scan dependencies', {
-        error: error.message,
-        packages: packageNames
-      });
-    }
 
-    return results;
+      return results;
+    } catch (error) {
+      logger.error('Failed to scan dependencies:', error);
+      throw error;
+    }
   }
 
   async analyzeDependency(name, version, packageInfo) {

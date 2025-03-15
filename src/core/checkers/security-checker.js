@@ -1,62 +1,67 @@
 const { exec } = require('child_process');
 const util = require('util');
-const execPromise = util.promisify(exec);
 const logger = require('../../utils/logger');
+const cache = require('../../utils/cache');
+
+const execPromise = util.promisify(exec);
 
 class SecurityChecker {
-  async check() {
+  constructor() {
+    this.cache = cache;
+  }
+
+  async runSecurityAudit(packageName, version) {
+    const cacheKey = `security:${packageName}@${version}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached;
+
     try {
-      const npmAudit = await this.runNpmAudit();
-      return this.processAuditResults(npmAudit);
+      const { stdout } = await execPromise(`npm audit --json ${packageName}@${version}`);
+      const results = JSON.parse(stdout);
+      
+      const vulnerabilities = this.processAuditResults(results);
+      this.cache.set(cacheKey, vulnerabilities);
+      
+      return vulnerabilities;
     } catch (error) {
-      logger.error('Security check failed:', error);
-      return {
-        vulnerabilities: [],
-        summary: { total: 0, critical: 0, high: 0, moderate: 0, low: 0 }
-      };
+      logger.debug(`Security audit failed for ${packageName}:`, error);
+      return [];
     }
   }
 
-  async runNpmAudit() {
-    try {
-      const { stdout } = await execPromise('npm audit --json');
-      return JSON.parse(stdout);
-    } catch (error) {
-      if (error.stdout) {
-        return JSON.parse(error.stdout);
-      }
-      throw error;
-    }
-  }
-
-  processAuditResults(audit) {
-    const result = {
-      vulnerabilities: [],
-      summary: {
-        total: 0,
-        critical: 0,
-        high: 0,
-        moderate: 0,
-        low: 0
-      }
-    };
-
-    // Process vulnerabilities
-    Object.entries(audit.vulnerabilities || {}).forEach(([name, vuln]) => {
-      result.vulnerabilities.push({
-        package: name,
-        severity: vuln.severity,
-        title: vuln.title,
-        description: vuln.url,
-        fixAvailable: vuln.fixAvailable,
-        path: vuln.path
+  processAuditResults(results) {
+    const vulnerabilities = [];
+    
+    if (results.advisories) {
+      Object.values(results.advisories).forEach(advisory => {
+        vulnerabilities.push({
+          id: advisory.id,
+          title: advisory.title,
+          severity: advisory.severity,
+          vulnerable_versions: advisory.vulnerable_versions,
+          recommendation: advisory.recommendation
+        });
       });
+    }
 
-      result.summary.total++;
-      result.summary[vuln.severity]++;
-    });
+    return vulnerabilities;
+  }
 
-    return result;
+  async checkVulnerabilities(dependencies) {
+    const results = [];
+    
+    for (const [name, version] of Object.entries(dependencies)) {
+      const vulnerabilities = await this.runSecurityAudit(name, version);
+      if (vulnerabilities.length > 0) {
+        results.push({
+          package: name,
+          version: version,
+          vulnerabilities
+        });
+      }
+    }
+
+    return results;
   }
 }
 
