@@ -92,5 +92,11 @@
     "assets",
     "LICENSE",
     "README.md"
-  ]
+  ],
+  "config": {
+    "registry": "https://registry.npmjs.org",
+    "maxRetries": 3,
+    "timeout": 30000,
+    "cacheTimeout": 3600000
+  }
 }

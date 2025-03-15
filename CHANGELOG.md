@@ -103,3 +103,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configuration validation
 - New Logo
 - Small Fixes to the README
+
+
+## [1.1.2] - 2025-03-15
+
+### Added
+- Added retry mechanism for failed network requests
+- Added support for custom registry URLs
+- Added improved caching system
+- Added better error messages and debug information
+- Added offline mode support
+- Added lock file analysis
+- Added configuration validation
+- Added performance metrics collection
+
+### Fixed
+- Bug Fixes
+- Improved error handling in network requests
+- Fixed timeout issues in dependency scanning
+- Fixed package.json validation

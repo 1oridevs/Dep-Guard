@@ -8,6 +8,7 @@ const versionUtils = require('../utils/version-utils');
 const licenseUtils = require('../utils/license-utils');
 const DependencyScanner = require('../core/analyzers/dependency-scanner');
 const fs = require('fs').promises;
+const { DependencyGuardianError, NetworkError, ValidationError } = require('../utils/error-utils');
 
 async function validateProjectPath(projectPath) {
   try {
@@ -31,16 +32,30 @@ async function analyzeCommand(options = {}) {
   try {
     // Validate project path
     const projectPath = options.path || process.cwd();
-    await validateProjectPath(projectPath);
+    try {
+      await validateProjectPath(projectPath);
+    } catch (error) {
+      throw new ValidationError(`Invalid project path: ${error.message}`, {
+        path: projectPath
+      });
+    }
 
-    const scanner = new DependencyScanner();
+    const scanner = new DependencyScanner({
+      registry: options.registry,
+      maxRetries: options.maxRetries || 3,
+      timeout: options.timeout || 30000,
+      cacheTimeout: options.cacheTimeout || 3600000
+    });
     
     // Read and validate package.json
     let packageJson;
     try {
       packageJson = await scanner.readPackageJson(projectPath);
     } catch (error) {
-      throw new Error(`Failed to parse package.json: ${error.message}`);
+      throw new ValidationError('Failed to parse package.json', {
+        path: projectPath,
+        error: error.message
+      });
     }
 
     // Get dependencies to analyze
@@ -108,7 +123,14 @@ async function analyzeCommand(options = {}) {
       process.exit(1);
     }
   } catch (error) {
-    logger.error('Analysis failed:', error.message);
+    if (error instanceof DependencyGuardianError) {
+      logger.error(`Analysis failed (${error.code}):`, error.message);
+      if (options.debug) {
+        logger.debug('Error details:', error.details);
+      }
+    } else {
+      logger.error('Analysis failed:', error.message);
+    }
     if (options.debug) {
       logger.debug('Stack trace:', error.stack);
     }

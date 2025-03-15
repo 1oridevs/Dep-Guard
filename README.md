@@ -21,6 +21,7 @@ Dependency Guardian is a command-line tool designed to help developers manage th
 - [Advanced Analysis](#advanced-analysis)
 - [Contributing](#contributing)
 - [License](#license)
+- [Options](#options)
 
 ## Features
 
@@ -56,6 +57,20 @@ Dependency Guardian is a command-line tool designed to help developers manage th
 - **Custom Configuration**: Define your own rules and policies for dependency management.
 - **User Preferences**: Save and load user preferences for themes and verbosity.
 - **Interactive Mode**: Provides an interactive command-line interface for managing dependencies.
+- **Offline Support**:
+  - Work offline with cached package data
+  - Configurable cache expiration
+  - Automatic cache management
+- **Lock File Analysis**:
+  - Support for package-lock.json
+  - Support for yarn.lock
+  - Support for pnpm-lock.yaml
+  - Dependency resolution validation
+- **Performance Monitoring**:
+  - Request timing metrics
+  - Cache hit/miss tracking
+  - Operation duration analysis
+  - Custom metric collection
 
 ## Installation
 
@@ -109,7 +124,14 @@ You can customize Dependency Guardian's behavior by creating a `.depguardrc.json
     "failOnIssues": true,
     "reportFormat": "junit",
     "createIssues": true
-  }
+  },
+  "registry": "https://registry.npmjs.org",
+  "maxRetries": 3,
+  "timeout": 30000,
+  "offline": false,
+  "cacheTimeout": 3600000,
+  "cachePath": ".dependency-guardian",
+  "strict": false
 }
 ```
 
@@ -212,3 +234,23 @@ Contributions are welcome! Please read the [CONTRIBUTING.md](docs/CONTRIBUTING.m
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](docs/LICENSE) file for details.
+
+## Options
+
+### Registry Configuration
+
+You can configure a custom npm registry:
+
+```bash
+dg analyze --registry=https://custom-registry.com
+```
+
+### Network Options
+
+- `--max-retries`: Maximum number of retry attempts (default: 3)
+- `--timeout`: Request timeout in milliseconds (default: 30000)
+- `--cache-timeout`: Cache timeout in milliseconds (default: 3600000)
+
+```bash
+dg analyze --max-retries=5 --timeout=60000
+```

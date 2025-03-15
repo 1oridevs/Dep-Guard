@@ -2,15 +2,23 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const logger = require('../../utils/logger');
-const cache = require('../managers/cache-manager');
+const cacheManager = require('../managers/cache-manager');
 const versionUtils = require('../../utils/version-utils');
 const licenseUtils = require('../../utils/license-utils');
+const CacheManager = require('../managers/cache-manager');
+const { NetworkError } = require('../../utils/error-utils');
 
 class DependencyScanner {
-  constructor() {
-    this.npmRegistry = 'https://registry.npmjs.org';
-    this.cache = new Map();
-    this.cacheTimeout = 3600000; // 1 hour
+  constructor(options = {}) {
+    this.npmRegistry = options.registry || process.env.NPM_REGISTRY || 'https://registry.npmjs.org';
+    this.maxRetries = options.maxRetries || 3;
+    this.retryDelay = options.retryDelay || 1000;
+    this.timeout = options.timeout || 30000;
+    this.cacheManager = new CacheManager({
+      ttl: options.cacheTimeout || 3600000,
+      persistPath: options.cachePath,
+      maxKeys: options.maxCacheKeys
+    });
     this.requestQueue = [];
     this.rateLimit = {
       requests: 0,
@@ -34,6 +42,23 @@ class DependencyScanner {
     }
 
     this.rateLimit.requests++;
+  }
+
+  async retryOperation(operation, { retries = this.maxRetries, delay = this.retryDelay } = {}) {
+    let lastError;
+    
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (i < retries - 1) {
+          await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i))); // Exponential backoff
+        }
+      }
+    }
+    
+    throw lastError;
   }
 
   async readPackageJson(projectPath) {
@@ -70,15 +95,25 @@ class DependencyScanner {
   }
 
   async getPackageInfo(packageName) {
-    try {
-      const response = await axios.get(`${this.npmRegistry}/${packageName}`);
-      return response.data;
-    } catch (error) {
-      if (error.response?.status === 404) {
-        return null;
+    const cacheKey = `pkg:${this.npmRegistry}/${packageName}`;
+    return this.cacheManager.get(cacheKey, async () => {
+      try {
+        const response = await this.retryOperation(() => 
+          axios.get(`${this.npmRegistry}/${packageName}`, {
+            timeout: this.timeout,
+            headers: {
+              'User-Agent': 'dependency-guardian'
+            }
+          })
+        );
+        return response.data;
+      } catch (error) {
+        if (error.response?.status === 404) {
+          return null;
+        }
+        throw new Error(`Failed to fetch package info: ${error.message}`);
       }
-      throw error;
-    }
+    });
   }
 
   getUpdateType(currentVersion, latestVersion) {
@@ -87,29 +122,57 @@ class DependencyScanner {
 
   async scanDependencies(dependencies) {
     const results = [];
+    const packageNames = Object.keys(dependencies);
     
-    for (const [name, version] of Object.entries(dependencies)) {
-      try {
-        const packageInfo = await this.getPackageInfo(name);
+    try {
+      const packageInfos = await this.cacheManager.mget(
+        packageNames.map(name => `pkg:${this.npmRegistry}/${name}`),
+        async (missingKeys) => {
+          const infos = {};
+          for (const key of missingKeys) {
+            const name = key.split('/').pop();
+            try {
+              const info = await this.getPackageInfo(name);
+              infos[key] = info;
+            } catch (error) {
+              if (error.response?.status === 404) {
+                infos[key] = null;
+              } else {
+                throw error;
+              }
+            }
+          }
+          return infos;
+        }
+      );
+
+      for (const [name, version] of Object.entries(dependencies)) {
+        const packageInfo = packageInfos[`pkg:${this.npmRegistry}/${name}`];
         if (!packageInfo) {
           results.push({
             name,
             version,
-            error: 'No package info returned'
+            error: 'Package not found'
           });
           continue;
         }
 
-        const result = await this.analyzeDependency(name, version, packageInfo);
-        results.push(result);
-      } catch (error) {
-        logger.warn(`Network error fetching package ${name}: ${error.message}`);
-        results.push({
-          name,
-          version,
-          error: error.message
-        });
+        try {
+          const result = await this.analyzeDependency(name, version, packageInfo);
+          results.push(result);
+        } catch (error) {
+          results.push({
+            name,
+            version,
+            error: error.message
+          });
+        }
       }
+    } catch (error) {
+      throw new NetworkError('Failed to scan dependencies', {
+        error: error.message,
+        packages: packageNames
+      });
     }
 
     return results;
