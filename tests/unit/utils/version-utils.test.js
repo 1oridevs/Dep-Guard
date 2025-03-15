@@ -8,7 +8,11 @@ describe('VersionUtils', () => {
       expect(result).toEqual({
         version: '1.2.3',
         isPreRelease: false,
-        type: 'semver'
+        major: 1,
+        minor: 2,
+        patch: 3,
+        prerelease: [],
+        range: 'exact'
       });
     });
 
@@ -17,7 +21,11 @@ describe('VersionUtils', () => {
       expect(result).toEqual({
         version: '1.2.3',
         isPreRelease: false,
-        type: 'semver'
+        major: 1,
+        minor: 2,
+        patch: 3,
+        prerelease: [],
+        range: 'caret'
       });
     });
 
@@ -26,7 +34,11 @@ describe('VersionUtils', () => {
       expect(result).toEqual({
         version: '1.2.3',
         isPreRelease: false,
-        type: 'semver'
+        major: 1,
+        minor: 2,
+        patch: 3,
+        prerelease: [],
+        range: 'tilde'
       });
     });
 
@@ -35,7 +47,11 @@ describe('VersionUtils', () => {
       expect(result).toEqual({
         version: '1.2.3-beta.1',
         isPreRelease: true,
-        type: 'semver'
+        major: 1,
+        minor: 2,
+        patch: 3,
+        prerelease: ['beta', 1],
+        range: 'exact'
       });
     });
 
@@ -64,6 +80,29 @@ describe('VersionUtils', () => {
 
     test('should handle pre-release versions', () => {
       expect(versionUtils.determineUpdateType('1.0.0', '2.0.0-beta.1')).toBe('major');
+    });
+  });
+
+  describe('satisfies', () => {
+    test('should check version satisfaction', () => {
+      expect(versionUtils.satisfies('1.2.3', '^1.0.0')).toBe(true);
+      expect(versionUtils.satisfies('2.0.0', '^1.0.0')).toBe(false);
+    });
+
+    test('should handle invalid versions', () => {
+      expect(versionUtils.satisfies('invalid', '^1.0.0')).toBe(false);
+    });
+  });
+
+  describe('sortVersions', () => {
+    test('should sort versions ascending', () => {
+      const versions = ['1.0.0', '2.0.0', '1.5.0'];
+      expect(versionUtils.sortVersions(versions)).toEqual(['1.0.0', '1.5.0', '2.0.0']);
+    });
+
+    test('should sort versions descending', () => {
+      const versions = ['1.0.0', '2.0.0', '1.5.0'];
+      expect(versionUtils.sortVersions(versions, false)).toEqual(['2.0.0', '1.5.0', '1.0.0']);
     });
   });
 });
