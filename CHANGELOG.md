@@ -120,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added interactive graph viewer
 - Added SVG export functionality
 - Added node coloring based on package health
+- Added dg alias for depguard
 
 ### Fixed
 - Bug Fixes

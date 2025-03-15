@@ -1,11 +1,12 @@
 const NodeCache = require('node-cache');
 
 class Cache {
-  constructor() {
+  constructor(options = {}) {
     this.cache = new NodeCache({
-      stdTTL: 3600, // 1 hour default TTL
-      checkperiod: 600, // Check for expired keys every 10 minutes
-      useClones: false
+      stdTTL: options.ttl || 3600, // 1 hour default TTL
+      checkperiod: options.checkperiod || 600, // Check for expired keys every 10 minutes
+      useClones: false,
+      maxKeys: options.maxKeys || -1 // Unlimited by default
     });
   }
 
@@ -28,6 +29,11 @@ class Cache {
   stats() {
     return this.cache.getStats();
   }
+
+  clear() {
+    return this.cache.flushAll();
+  }
 }
 
+// Export a singleton instance
 module.exports = new Cache(); 

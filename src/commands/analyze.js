@@ -9,6 +9,8 @@ const licenseUtils = require('../utils/license-utils');
 const DependencyScanner = require('../core/analyzers/dependency-scanner');
 const fs = require('fs').promises;
 const { DependencyGuardianError, NetworkError, ValidationError } = require('../utils/error-utils');
+const securityChecker = require('../core/checkers/security-checker');
+const { convertToCSV, convertToHTML } = require('../utils/formatters');
 
 async function validateProjectPath(projectPath) {
   try {
@@ -28,114 +30,114 @@ async function validateProjectPath(projectPath) {
   }
 }
 
-async function analyzeCommand(options = {}) {
-  try {
-    // Validate project path
-    const projectPath = options.path || process.cwd();
-    try {
-      await validateProjectPath(projectPath);
-    } catch (error) {
-      throw new ValidationError(`Invalid project path: ${error.message}`, {
-        path: projectPath
-      });
-    }
-
-    const scanner = new DependencyScanner({
-      registry: options.registry,
-      maxRetries: options.maxRetries || 3,
-      timeout: options.timeout || 30000,
-      cacheTimeout: options.cacheTimeout || 3600000
-    });
-    
-    // Read and validate package.json
-    let packageJson;
-    try {
-      packageJson = await scanner.readPackageJson(projectPath);
-    } catch (error) {
-      throw new ValidationError('Failed to parse package.json', {
-        path: projectPath,
-        error: error.message
-      });
-    }
-
-    // Get dependencies to analyze
-    const dependencies = {
-      ...packageJson.dependencies,
-      ...(options.dev ? packageJson.devDependencies : {})
-    };
-
-    if (!dependencies || Object.keys(dependencies).length === 0) {
-      const message = 'No dependencies found';
-      if (options.json) {
-        console.log(JSON.stringify({
-          summary: { total: 0 },
-          dependencies: [],
-          message
-        }));
-      } else {
-        logger.info(message);
-      }
-      return;
-    }
-
-    // Scan dependencies with timeout
-    const timeoutMs = options.timeout || 30000;
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Analysis timed out')), timeoutMs)
-    );
-
-    const results = await Promise.race([
-      scanner.scanDependencies(dependencies),
-      timeoutPromise
-    ]);
-
-    // Format and output results
-    if (options.json) {
-      console.log(JSON.stringify({
-        summary: {
-          total: results.length,
-          outdated: results.filter(r => r.updateType !== 'none').length,
-          errors: results.filter(r => r.error).length
-        },
-        dependencies: results
-      }, null, 2));
-    } else {
-      logger.info('Dependency Analysis Report');
-      logger.info('--------------------------');
+function analyzeCommand(program) {
+  program
+    .command('analyze')
+    .description('Analyze project dependencies')
+    .option('-f, --format <type>', 'Output format (table, json, csv, html)', 'table')
+    .option('-o, --output <file>', 'Output file path')
+    .action(async (options) => {
+      const spinner = ora('Analyzing dependencies...').start();
       
-      results.forEach(dep => {
-        if (dep.error) {
-          logger.error(`✗ ${dep.name}@${dep.version} - ${dep.error}`);
-        } else {
-          const status = dep.updateType === 'none' ? '✓' : '!';
-          logger.info(`${status} ${dep.name}@${dep.version} -> ${dep.latestVersion}`);
+      try {
+        // Validate project path
+        const projectPath = options.path || process.cwd();
+        try {
+          await validateProjectPath(projectPath);
+        } catch (error) {
+          throw new ValidationError(`Invalid project path: ${error.message}`, {
+            path: projectPath
+          });
         }
-      });
 
-      logger.info('\nSummary:');
-      logger.info(`Total Dependencies: ${results.length}`);
-      logger.info(`Outdated: ${results.filter(r => r.updateType !== 'none').length}`);
-      logger.info(`Errors: ${results.filter(r => r.error).length}`);
-    }
+        const scanner = new DependencyScanner({
+          registry: options.registry,
+          maxRetries: options.maxRetries || 3,
+          timeout: options.timeout || 30000,
+          cacheTimeout: options.cacheTimeout || 3600000
+        });
+        
+        // Read and validate package.json
+        let packageJson;
+        try {
+          packageJson = await scanner.readPackageJson(projectPath);
+        } catch (error) {
+          throw new ValidationError('Failed to parse package.json', {
+            path: projectPath,
+            error: error.message
+          });
+        }
 
-    // Exit with error code if required
-    if (options.strict && results.some(r => r.error || r.updateType !== 'none')) {
-      process.exit(1);
-    }
-  } catch (error) {
-    if (error instanceof DependencyGuardianError) {
-      logger.error(`Analysis failed (${error.code}):`, error.message);
-      if (options.debug) {
-        logger.debug('Error details:', error.details);
+        // Get dependencies to analyze
+        const dependencies = {
+          ...packageJson.dependencies,
+          ...(options.dev ? packageJson.devDependencies : {})
+        };
+
+        if (!dependencies || Object.keys(dependencies).length === 0) {
+          const message = 'No dependencies found';
+          if (options.json) {
+            console.log(JSON.stringify({
+              summary: { total: 0 },
+              dependencies: [],
+              message
+            }));
+          } else {
+            logger.info(message);
+          }
+          return;
+        }
+
+        // Scan dependencies with timeout
+        const timeoutMs = options.timeout || 30000;
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Analysis timed out')), timeoutMs)
+        );
+
+        const results = await Promise.race([
+          scanner.scanDependencies(dependencies),
+          timeoutPromise
+        ]);
+
+        // Format and output results
+        if (options.json) {
+          console.log(JSON.stringify({
+            summary: {
+              total: results.length,
+              outdated: results.filter(r => r.updateType !== 'none').length,
+              errors: results.filter(r => r.error).length
+            },
+            dependencies: results
+          }, null, 2));
+        } else {
+          logger.info('Dependency Analysis Report');
+          logger.info('--------------------------');
+          
+          results.forEach(dep => {
+            if (dep.error) {
+              logger.error(`✗ ${dep.name}@${dep.version} - ${dep.error}`);
+            } else {
+              const status = dep.updateType === 'none' ? '✓' : '!';
+              logger.info(`${status} ${dep.name}@${dep.version} -> ${dep.latestVersion}`);
+            }
+          });
+
+          logger.info('\nSummary:');
+          logger.info(`Total Dependencies: ${results.length}`);
+          logger.info(`Outdated: ${results.filter(r => r.updateType !== 'none').length}`);
+          logger.info(`Errors: ${results.filter(r => r.error).length}`);
+        }
+
+        // Exit with error code if required
+        if (options.strict && results.some(r => r.error || r.updateType !== 'none')) {
+          process.exit(1);
+        }
+      } catch (error) {
+        spinner.fail(chalk.red('Analysis failed'));
+        logger.error('Analysis error:', error);
+        process.exit(1);
       }
-    } else {
-      logger.error('Analysis failed:', error.message);
-    }
-    if (options.debug) {
-      logger.debug('Stack trace:', error.stack);
-    }
-    process.exit(1);
-  }
+    });
 }
 
 function displayAnalysis(analysis) {

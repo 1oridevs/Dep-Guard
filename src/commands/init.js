@@ -3,18 +3,22 @@ const inquirer = require('inquirer');
 const fs = require('fs/promises');
 const path = require('path');
 const chalk = require('chalk');
-const logger = require('../logger');
+const logger = require('../utils/logger');
 
-const initCommand = new Command('init')
-  .description('Interactively initialize Dependency Guardian configuration')
-  .action(async () => {
-    try {
-      const config = await promptConfiguration();
-      await saveConfiguration(config);
-    } catch (error) {
-      logger.error('Initialization error:', error);
-    }
-  });
+function initCommand(program) {
+  program
+    .command('init')
+    .description('Interactively initialize Dependency Guardian configuration')
+    .action(async () => {
+      try {
+        const config = await promptConfiguration();
+        await saveConfiguration(config);
+      } catch (error) {
+        logger.error('Failed to initialize configuration:', error);
+        process.exit(1);
+      }
+    });
+}
 
 async function promptConfiguration() {
   const questions = [

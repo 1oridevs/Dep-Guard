@@ -9,7 +9,8 @@ const initCommand = require('./init');
 const reportCommand = require('./report');
 const policyCommand = require('./policy');
 
-module.exports = [
+// Make sure each command is properly initialized before exporting
+const commands = [
   analyzeCommand,
   scanCommand,
   ciCommand,
@@ -20,4 +21,6 @@ module.exports = [
   initCommand,
   reportCommand,
   policyCommand
-]; 
+].filter(Boolean); // Filter out any undefined commands
+
+module.exports = commands; 

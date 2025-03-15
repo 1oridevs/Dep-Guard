@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 
-const { program } = require('commander');
-const chalk = require('chalk');
-const logger = require('./utils/logger');
-const config = require('./utils/config');
+const { Command } = require('commander');
 const commands = require('./commands');
+const logger = require('./utils/logger');
 
 async function main() {
   try {
-    // Load config first
-    await config.load();
+    const program = new Command();
 
-    // Setup program
     program
       .name('dependency-guardian')
       .alias('dg')
@@ -33,20 +29,20 @@ async function main() {
         }
       });
 
-    // Register commands
-    Object.values(commands).forEach(cmd => cmd(program, config));
+    // Register all commands
+    commands.forEach(command => {
+      if (typeof command === 'function') {
+        command(program);
+      } else {
+        logger.warn(`Skipping invalid command: ${command}`);
+      }
+    });
 
-    // Parse command line arguments
     await program.parseAsync(process.argv);
   } catch (error) {
-    logger.error('Failed to start:', error);
+    logger.error('Fatal error:', error);
     process.exit(1);
   }
 }
 
-// Run the CLI
-if (require.main === module) {
-  main();
-}
-
-module.exports = main; 
+main(); 

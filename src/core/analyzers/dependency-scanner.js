@@ -2,10 +2,9 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const logger = require('../../utils/logger');
-const cacheManager = require('../managers/cache-manager');
+const cache = require('../../utils/cache');
 const versionUtils = require('../../utils/version-utils');
 const licenseUtils = require('../../utils/license-utils');
-const CacheManager = require('../managers/cache-manager');
 const { NetworkError } = require('../../utils/error-utils');
 
 class DependencyScanner {
@@ -14,11 +13,7 @@ class DependencyScanner {
     this.maxRetries = options.maxRetries || 3;
     this.retryDelay = options.retryDelay || 1000;
     this.timeout = options.timeout || 30000;
-    this.cacheManager = new CacheManager({
-      ttl: options.cacheTimeout || 3600000,
-      persistPath: options.cachePath,
-      maxKeys: options.maxCacheKeys
-    });
+    this.cache = cache;
     this.requestQueue = [];
     this.rateLimit = {
       requests: 0,
@@ -96,7 +91,7 @@ class DependencyScanner {
 
   async getPackageInfo(packageName) {
     const cacheKey = `pkg:${this.npmRegistry}/${packageName}`;
-    return this.cacheManager.get(cacheKey, async () => {
+    return this.cache.get(cacheKey, async () => {
       try {
         const response = await this.retryOperation(() => 
           axios.get(`${this.npmRegistry}/${packageName}`, {
@@ -125,7 +120,7 @@ class DependencyScanner {
     const packageNames = Object.keys(dependencies);
     
     try {
-      const packageInfos = await this.cacheManager.mget(
+      const packageInfos = await this.cache.mget(
         packageNames.map(name => `pkg:${this.npmRegistry}/${name}`),
         async (missingKeys) => {
           const infos = {};

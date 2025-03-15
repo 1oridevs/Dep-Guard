@@ -1,36 +1,37 @@
-const { Command } = require('commander');
-const chalk = require('chalk');
 const ora = require('ora');
+const chalk = require('chalk');
 const fs = require('fs/promises');
 const { exec } = require('child_process');
 const util = require('util');
-const logger = require('../logger');
+const logger = require('../utils/logger');
 
 const execPromise = util.promisify(exec);
 
-const auditCommand = new Command('audit');
+function auditCommand(program) {
+  program
+    .command('audit')
+    .description('Audit project dependencies for security vulnerabilities')
+    .option('-l, --level <level>', 'Minimum severity level to display (low, moderate, high, critical)', 'low')
+    .option('-f, --fix', 'Attempt to fix vulnerabilities')
+    .option('-r, --report <path>', 'Save report to file')
+    .action(async (options) => {
+      try {
+        const results = await runAudit(options);
+        displayResults(results, options.level);
 
-auditCommand
-  .description('Audit project dependencies for security vulnerabilities')
-  .option('-l, --level <level>', 'Minimum severity level to display (low, moderate, high, critical)', 'low')
-  .option('-f, --fix', 'Attempt to fix vulnerabilities')
-  .option('-r, --report <path>', 'Save report to file')
-  .action(async options => {
-    try {
-      const results = await runAudit(options);
-      displayResults(results, options.level);
+        if (options.fix) {
+          await fixVulnerabilities(results);
+        }
 
-      if (options.fix) {
-        await fixVulnerabilities(results);
+        if (options.report) {
+          await saveReport(results, options.report);
+        }
+      } catch (error) {
+        logger.error('Audit error:', error);
+        process.exit(1);
       }
-
-      if (options.report) {
-        await saveReport(results, options.report);
-      }
-    } catch (error) {
-      logger.error('Audit error:', error);
-    }
-  });
+    });
+}
 
 async function runAudit(options) {
   const severityLevels = ['low', 'moderate', 'high', 'critical'];
