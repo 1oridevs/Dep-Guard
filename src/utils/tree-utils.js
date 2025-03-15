@@ -1,8 +1,13 @@
 const madge = require('madge');
 const path = require('path');
 const logger = require('./logger');
+const chalk = require('chalk');
 
 class TreeUtils {
+  constructor() {
+    this.indent = '  ';
+  }
+
   async buildDependencyTree(projectPath) {
     try {
       const result = await madge(projectPath, {
@@ -41,36 +46,44 @@ class TreeUtils {
   }
 
   formatTreeOutput(tree, options = {}) {
-    if (!tree || typeof tree !== 'object') {
-      throw new Error('Invalid dependency tree');
+    const lines = [];
+    const maxDepth = options.maxDepth || Infinity;
+
+    function traverse(node, prefix = '', depth = 0) {
+      if (depth > maxDepth) return;
+
+      // Add root node
+      if (depth === 0) {
+        lines.push(node.name);
+      }
+
+      // Process children
+      if (node.children && depth < maxDepth) {
+        const children = node.children;
+        children.forEach((child, index) => {
+          const isLast = index === children.length - 1;
+          const linePrefix = isLast ? '└── ' : '├── ';
+          const childPrefix = isLast ? '    ' : '│   ';
+          
+          lines.push(prefix + linePrefix + child.name);
+          
+          if (child.children) {
+            traverse(child, prefix + childPrefix, depth + 1);
+          }
+        });
+      }
     }
 
-    const { maxDepth = Infinity } = options;
-    const output = [];
-    const visited = new Set();
+    traverse(tree);
+    return lines.join('\n');
+  }
 
-    const formatNode = (node, depth = 0, prefix = '', parentPrefix = '') => {
-      if (depth > maxDepth || visited.has(node)) return;
-      
-      output.push(prefix + node);
-      visited.add(node);
-
-      const dependencies = tree[node] || [];
-      dependencies.forEach((dep, i, arr) => {
-        const isLast = i === arr.length - 1;
-        const newPrefix = parentPrefix + (isLast ? '    ' : '│   ') + (isLast ? '└── ' : '├── ');
-        const nextPrefix = parentPrefix + (isLast ? '    ' : '│   ');
-        formatNode(dep, depth + 1, newPrefix, nextPrefix);
-      });
-    };
-
-    Object.keys(tree).forEach(root => {
-      if (!visited.has(root)) {
-        formatNode(root);
-      }
-    });
-
-    return output.join('\n') + '\n';
+  colorize(tree, getColor = () => chalk.white) {
+    const lines = this.formatTreeOutput(tree).split('\n');
+    return lines.map(line => {
+      const [prefix, name] = line.split(/(?<=^[│├└\s]+)/);
+      return prefix + getColor(name)(name);
+    }).join('\n');
   }
 }
 
