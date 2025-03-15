@@ -37,6 +37,9 @@
   "dependencies": {
     "axios": "^1.6.0",
     "chalk": "^4.1.2",
+    "cli-table3": "^0.6.3",
+    "webpack": "^5.90.3",
+    "terser-webpack-plugin": "^5.3.10",
     "d3": "^7.8.5",
     "svgdom": "^0.1.19",
     "jsdom": "^24.0.0",
@@ -52,7 +55,8 @@
     "node-cache": "^5.1.2",
     "ora": "^5.4.1",
     "p-limit": "^3.1.0",
-    "semver": "^7.7.1"
+    "semver": "^7.7.1",
+    "spdx-license-list": "^6.6.0"
   },
   "devDependencies": {
     "eslint": "^8.57.0",

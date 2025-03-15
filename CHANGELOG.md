@@ -121,6 +121,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added SVG export functionality
 - Added node coloring based on package health
 - Added dg alias for depguard
+- Added dependency cleanup suggestions
+- Added license compatibility analysis
+- Added team collaboration features
+- Added bundle size analysis
+- Added impact analysis capabilities
+- Added size optimization suggestions
+- Added automated testing improvements
 
 ### Fixed
 - Bug Fixes
