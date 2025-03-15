@@ -79,12 +79,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oridevs/dependency-guardian.git"
+    "url": "git+https://github.com/1oridevs/Dep-Guard.git"
   },
   "bugs": {
-    "url": "https://github.com/oridevs/dependency-guardian/issues"
+    "url": "https://github.com/1oridevs/Dep-Guard/issues"
   },
-  "homepage": "https://github.com/oridevs/dependency-guardian#readme",
+  "homepage": "https://github.com/1oridevs/Dep-Guard#readme",
   "files": [
     "src",
     "assets",

@@ -4,8 +4,6 @@
   <img src="assets/logo.svg" width="200" height="200" alt="Dependency Guardian Logo">
 </p>
 
-[![Test](https://github.com/oridevs/dependency-guardian/actions/workflows/test.yml/badge.svg)](https://github.com/oridevs/dependency-guardian/actions/workflows/test.yml)
-[![CodeQL](https://github.com/oridevs/dependency-guardian/actions/workflows/codeql.yml/badge.svg)](https://github.com/oridevs/dependency-guardian/actions/workflows/codeql.yml)
 [![npm version](https://badge.fury.io/js/dependency-guardian.svg)](https://badge.fury.io/js/dependency-guardian)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
