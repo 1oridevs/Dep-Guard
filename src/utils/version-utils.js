@@ -99,4 +99,77 @@ class VersionUtils {
   }
 }
 
-module.exports = new VersionUtils(); 
+class VersionChecker {
+  constructor() {
+    this.updateTypes = {
+      MAJOR: 'major',
+      MINOR: 'minor',
+      PATCH: 'patch',
+      NONE: 'none'
+    };
+  }
+
+  getUpdateType(currentVersion, latestVersion) {
+    try {
+      if (!semver.valid(currentVersion) || !semver.valid(latestVersion)) {
+        throw new Error('Invalid version format');
+      }
+
+      if (semver.gt(latestVersion, currentVersion)) {
+        if (semver.major(latestVersion) > semver.major(currentVersion)) {
+          return this.updateTypes.MAJOR;
+        }
+        if (semver.minor(latestVersion) > semver.minor(currentVersion)) {
+          return this.updateTypes.MINOR;
+        }
+        if (semver.patch(latestVersion) > semver.patch(currentVersion)) {
+          return this.updateTypes.PATCH;
+        }
+      }
+      return this.updateTypes.NONE;
+    } catch (error) {
+      logger.error('Version comparison failed:', error);
+      throw error;
+    }
+  }
+
+  isUpdateSafe(currentVersion, newVersion) {
+    const updateType = this.getUpdateType(currentVersion, newVersion);
+    return updateType === this.updateTypes.PATCH || updateType === this.updateTypes.MINOR;
+  }
+
+  getSafeUpdate(currentVersion, availableVersions) {
+    try {
+      const validVersions = availableVersions
+        .filter(v => semver.valid(v))
+        .sort(semver.rcompare);
+
+      return validVersions.find(version => 
+        this.isUpdateSafe(currentVersion, version)
+      ) || currentVersion;
+    } catch (error) {
+      logger.error('Safe update check failed:', error);
+      return currentVersion;
+    }
+  }
+
+  formatUpdateType(type) {
+    const colors = {
+      [this.updateTypes.MAJOR]: 'red',
+      [this.updateTypes.MINOR]: 'yellow',
+      [this.updateTypes.PATCH]: 'green',
+      [this.updateTypes.NONE]: 'blue'
+    };
+
+    return {
+      type,
+      color: colors[type] || 'white',
+      isSafe: type === this.updateTypes.PATCH || type === this.updateTypes.MINOR
+    };
+  }
+}
+
+module.exports = {
+  VersionUtils: new VersionUtils(),
+  VersionChecker: new VersionChecker()
+}; 
