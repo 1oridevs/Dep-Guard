@@ -14,8 +14,8 @@ async function main() {
     // Setup program
     program
       .name('dependency-guardian')
-      .description('A CLI tool for managing and securing project dependencies')
-      .version('1.0.0');
+      .description('A powerful dependency management and analysis tool for Node.js projects')
+      .version('1.1.0');
 
     // Register commands
     Object.values(commands).forEach(cmd => cmd(program, config));

@@ -1,5 +1,4 @@
 const NodeCache = require('node-cache');
-const logger = require('../../utils/logger');
 
 class CacheManager {
   constructor() {
@@ -33,6 +32,10 @@ class CacheManager {
 
   flush() {
     return this.cache.flushAll();
+  }
+
+  stats() {
+    return this.cache.getStats();
   }
 
   getStats() {
