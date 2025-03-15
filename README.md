@@ -27,6 +27,30 @@ Dependency Guardian is a command-line tool designed to help developers manage th
 - **Dependency Scanning**: Identify outdated packages and suggest updates.
 - **Security Vulnerabilities**: Integrate with npm audit to check for known vulnerabilities.
 - **License Compliance**: Check dependencies against allowed and forbidden licenses.
+- **Dependency Impact Analysis**:
+  - Bundle size impact prediction
+  - Breaking changes detection
+  - Compatibility scoring
+- **Smart Updates**:
+  - Automated dependency updates with rollback
+  - Intelligent update ordering
+  - Test suite integration
+- **Monitoring & Alerts**:
+  - Real-time vulnerability monitoring
+  - Slack/Discord/Email notifications
+  - Custom webhook support
+- **Performance Analysis**:
+  - Bundle size tracking over time
+  - Import cost analysis
+  - Tree-shaking effectiveness
+- **Policy Management**:
+  - Team-wide dependency policies
+  - Custom approval workflows
+  - Policy templates
+- **Dependency Health Score**:
+  - Package quality metrics
+  - Maintenance score
+  - Community health indicators
 - **Advanced Analysis**: Perform dependency tree analysis, circular dependency detection, bundle size impact analysis, and duplicate dependency detection.
 - **CI/CD Integration**: Easily integrate with GitHub Actions and GitLab CI.
 - **Custom Configuration**: Define your own rules and policies for dependency management.
