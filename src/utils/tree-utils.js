@@ -41,31 +41,21 @@ class TreeUtils {
   }
 
   formatTreeOutput(tree, options = {}) {
-    const {
-      maxDepth = Infinity,
-      excludePatterns = [],
-      showOrphans = true
-    } = options;
-
+    const { maxDepth = Infinity } = options;
     const output = [];
     const visited = new Set();
 
     const formatNode = (node, depth = 0, prefix = '') => {
-      if (depth > maxDepth) return;
-      if (visited.has(node)) return;
+      if (depth > maxDepth || visited.has(node)) return;
       visited.add(node);
 
-      const shouldExclude = excludePatterns.some(pattern => 
-        node.match(new RegExp(pattern))
-      );
-      if (shouldExclude) return;
-
-      output.push(`${prefix}${path.basename(node)}`);
+      output.push(prefix + node);
 
       const dependencies = tree[node] || [];
       dependencies.forEach((dep, i, arr) => {
         const isLast = i === arr.length - 1;
         const newPrefix = prefix + (isLast ? '└── ' : '├── ');
+        const childPrefix = prefix + (isLast ? '    ' : '│   ');
         formatNode(dep, depth + 1, newPrefix);
       });
     };
@@ -73,11 +63,10 @@ class TreeUtils {
     Object.keys(tree).forEach(root => {
       if (!visited.has(root)) {
         formatNode(root);
-        output.push('');
       }
     });
 
-    return output.join('\n');
+    return output.join('\n') + '\n';
   }
 }
 

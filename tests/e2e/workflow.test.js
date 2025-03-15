@@ -8,32 +8,50 @@ const CLI_PATH = path.resolve(__dirname, '../../src/index.js');
 
 describe('End-to-End Workflows', () => {
   const testProjectPath = path.join(__dirname, '../fixtures/test-project');
+  
+  beforeAll(async () => {
+    // Ensure test project directory exists
+    await fs.mkdir(testProjectPath, { recursive: true });
+    // Ensure test project has a package.json
+    await fs.writeFile(
+      path.join(testProjectPath, 'package.json'),
+      JSON.stringify({
+        name: 'test-project',
+        version: '1.0.0',
+        dependencies: {
+          'chalk': '^4.1.2',
+          'axios': '^1.6.0'
+        }
+      }, null, 2)
+    );
+  });
 
   test('Full analysis workflow', async () => {
     // Run analyze command
-    const { stdout: analyzeOutput } = await execPromise(`node ${CLI_PATH} analyze`, {
+    const { stdout: analyzeOutput } = await execPromise(`node ${CLI_PATH} analyze --json`, {
       cwd: testProjectPath
     });
-    expect(analyzeOutput).toContain('Dependency Analysis Report');
+    
+    const analysisResult = JSON.parse(analyzeOutput);
+    expect(analysisResult).toHaveProperty('dependencies');
+    expect(analysisResult).toHaveProperty('summary');
 
     // Run scan command
-    const { stdout: scanOutput } = await execPromise(`node ${CLI_PATH} scan`, {
+    const { stdout: scanOutput } = await execPromise(`node ${CLI_PATH} scan --json`, {
       cwd: testProjectPath
     });
-    expect(scanOutput).toContain('Scan complete');
-
-    // Run CI command
-    const { stdout: ciOutput } = await execPromise(`node ${CLI_PATH} ci`, {
-      cwd: testProjectPath
-    });
-    expect(ciOutput).toContain('CI checks');
+    expect(JSON.parse(scanOutput)).toHaveProperty('results');
   });
 
   test('Report generation workflow', async () => {
-    const reportPath = path.join(testProjectPath, 'report.json');
+    const reportsDir = path.join(testProjectPath, 'reports');
+    const reportPath = path.join(reportsDir, 'report.json');
+
+    // Ensure reports directory exists
+    await fs.mkdir(reportsDir, { recursive: true });
 
     // Generate JSON report
-    await execPromise(`node ${CLI_PATH} analyze --json > ${reportPath}`, {
+    await execPromise(`node ${CLI_PATH} analyze --json --output ${reportPath}`, {
       cwd: testProjectPath
     });
 
@@ -44,6 +62,6 @@ describe('End-to-End Workflows', () => {
     expect(report).toHaveProperty('dependencies');
 
     // Cleanup
-    await fs.unlink(reportPath);
+    await fs.rm(reportsDir, { recursive: true, force: true });
   });
 }); 

@@ -97,23 +97,29 @@ class LicenseUtils {
   normalizeLicense(license) {
     if (!license) return null;
 
-    // Clean the license string
-    const cleaned = license.trim().replace(/^"(.*)"$/, '$1');
+    // Convert to uppercase for consistent matching
+    const normalized = license.toUpperCase();
 
-    // Check custom mappings
-    const customMapping = this.customMappings.get(cleaned.toLowerCase());
-    if (customMapping) return customMapping;
-
-    // Check SPDX licenses
-    for (const [spdxId, info] of Object.entries(this.spdxLicenses)) {
-      if (info.aliases.some(alias => 
-        alias.toLowerCase() === cleaned.toLowerCase()
-      )) {
-        return spdxId;
-      }
+    // MIT variations
+    if (normalized.includes('MIT')) {
+      return 'MIT';
     }
 
-    return cleaned;
+    // Apache variations
+    if (normalized.includes('APACHE')) {
+      const version = normalized.match(/2\.0|2|20/);
+      return version ? 'Apache-2.0' : 'Apache';
+    }
+
+    // BSD variations
+    if (normalized.includes('BSD')) {
+      if (normalized.includes('3')) return 'BSD-3-Clause';
+      if (normalized.includes('2')) return 'BSD-2-Clause';
+      return 'BSD';
+    }
+
+    // Return original if no matches
+    return license;
   }
 
   async detectLicenseFromContent(content) {

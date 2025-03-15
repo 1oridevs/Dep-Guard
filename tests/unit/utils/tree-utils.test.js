@@ -33,7 +33,11 @@ describe('TreeUtils', () => {
       };
 
       const result = treeUtils.formatTreeOutput(tree, { maxDepth: 1 });
-      expect(result.split('\n').length).toBe(4); // index.js + 2 deps + empty line
+      const lines = result.trim().split('\n');
+      expect(lines.length).toBe(3); // index.js + a.js + b.js
+      expect(lines[0]).toBe('index.js');
+      expect(lines[1]).toMatch(/a\.js$/);
+      expect(lines[2]).toMatch(/b\.js$/);
     });
   });
 }); 

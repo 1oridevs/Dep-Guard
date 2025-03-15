@@ -87,6 +87,7 @@
   "homepage": "https://github.com/oridevs/dependency-guardian#readme",
   "files": [
     "src",
+    "assets",
     "LICENSE",
     "README.md"
   ]
