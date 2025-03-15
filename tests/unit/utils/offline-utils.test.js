@@ -42,4 +42,32 @@ describe('OfflineUtils', () => {
     const data = await offlineUtils.getPackageData('old-pkg');
     expect(data).toEqual(testData);
   });
+
+  it('should handle corrupted cache files', async () => {
+    const filePath = path.join(testDir, 'corrupt-pkg.json');
+    await fs.writeFile(filePath, 'invalid json');
+    
+    const data = await offlineUtils.getPackageData('corrupt-pkg');
+    expect(data).toBeNull();
+  });
+
+  it('should handle cache directory creation errors', async () => {
+    const originalCacheDir = offlineUtils.cacheDir;
+    offlineUtils.cacheDir = '/root/invalid'; // Should fail due to permissions
+    
+    await expect(offlineUtils.savePackageData('test', {}))
+      .rejects
+      .toThrow();
+      
+    offlineUtils.cacheDir = originalCacheDir;
+  });
+
+  it('should respect maxAge setting', async () => {
+    const customUtils = new OfflineUtils({ maxAge: 1000 }); // 1 second
+    await customUtils.savePackageData('test', { data: 'test' });
+    
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    const data = await customUtils.getPackageData('test');
+    expect(data).toBeNull();
+  });
 }); 

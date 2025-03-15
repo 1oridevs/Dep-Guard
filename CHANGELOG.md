@@ -116,6 +116,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added lock file analysis
 - Added configuration validation
 - Added performance metrics collection
+- Added dependency graph visualization
+- Added interactive graph viewer
+- Added SVG export functionality
+- Added node coloring based on package health
 
 ### Fixed
 - Bug Fixes
