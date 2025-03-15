@@ -3,10 +3,15 @@ const logger = require('../../../src/utils/logger');
 describe('Logger', () => {
   let consoleLogSpy;
   let consoleErrorSpy;
+  let logger;
 
   beforeEach(() => {
-    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
-    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    // Get a fresh instance for each test
+    jest.isolateModules(() => {
+      logger = require('../../../src/utils/logger');
+    });
   });
 
   afterEach(() => {
@@ -40,6 +45,9 @@ describe('Logger', () => {
 
     logger.setDebug(true);
     logger.debug('test debug');
-    expect(consoleLogSpy).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      'test debug'
+    );
   });
 }); 

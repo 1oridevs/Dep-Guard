@@ -41,22 +41,26 @@ class TreeUtils {
   }
 
   formatTreeOutput(tree, options = {}) {
+    if (!tree || typeof tree !== 'object') {
+      throw new Error('Invalid dependency tree');
+    }
+
     const { maxDepth = Infinity } = options;
     const output = [];
     const visited = new Set();
 
-    const formatNode = (node, depth = 0, prefix = '') => {
+    const formatNode = (node, depth = 0, prefix = '', parentPrefix = '') => {
       if (depth > maxDepth || visited.has(node)) return;
-      visited.add(node);
-
+      
       output.push(prefix + node);
+      visited.add(node);
 
       const dependencies = tree[node] || [];
       dependencies.forEach((dep, i, arr) => {
         const isLast = i === arr.length - 1;
-        const newPrefix = prefix + (isLast ? '└── ' : '├── ');
-        const childPrefix = prefix + (isLast ? '    ' : '│   ');
-        formatNode(dep, depth + 1, newPrefix);
+        const newPrefix = parentPrefix + (isLast ? '    ' : '│   ') + (isLast ? '└── ' : '├── ');
+        const nextPrefix = parentPrefix + (isLast ? '    ' : '│   ');
+        formatNode(dep, depth + 1, newPrefix, nextPrefix);
       });
     };
 

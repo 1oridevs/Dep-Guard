@@ -6,6 +6,7 @@ jest.mock('axios');
 describe('DependencyScanner', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    dependencyScanner.cache.clear();
   });
 
   describe('getPackageInfo', () => {
@@ -24,7 +25,7 @@ describe('DependencyScanner', () => {
       expect(axios.get).toHaveBeenCalledWith('https://registry.npmjs.org/test-package');
     });
 
-    test('should handle network errors', async () => {
+    it('should handle network errors', async () => {
       axios.get.mockRejectedValueOnce(new Error('Network error'));
       const result = await dependencyScanner.getPackageInfo('test-package');
       expect(result).toBeNull();
@@ -52,6 +53,56 @@ describe('DependencyScanner', () => {
       expect(results[0]).toHaveProperty('name');
       expect(results[0]).toHaveProperty('version');
       expect(results[0]).toHaveProperty('latestVersion');
+    });
+
+    it('should handle invalid package info', async () => {
+      axios.get.mockResolvedValueOnce({ data: null });
+
+      const results = await dependencyScanner.scanDependencies({
+        'test-package': '1.0.0'
+      });
+
+      expect(results[0]).toHaveProperty('error');
+      expect(results[0].error).toBe('No package info returned');
+    });
+
+    it('should handle network errors', async () => {
+      const mockError = new Error('Network error');
+      axios.get.mockRejectedValueOnce(mockError);
+
+      const results = await dependencyScanner.scanDependencies({
+        'test-package': '1.0.0'
+      });
+
+      expect(results[0]).toEqual({
+        name: 'test-package',
+        version: '1.0.0',
+        error: 'Network error'
+      });
+    });
+
+    it('should handle missing package info', async () => {
+      axios.get.mockResolvedValueOnce({ data: null });
+
+      const results = await dependencyScanner.scanDependencies({
+        'test-package': '1.0.0'
+      });
+
+      expect(results[0]).toEqual({
+        name: 'test-package',
+        version: '1.0.0',
+        error: 'No package info returned'
+      });
+    });
+
+    it('should handle invalid dependencies input', async () => {
+      await expect(dependencyScanner.scanDependencies(null))
+        .rejects
+        .toThrow('Invalid dependencies object');
+
+      await expect(dependencyScanner.scanDependencies('not-an-object'))
+        .rejects
+        .toThrow('Invalid dependencies object');
     });
   });
 }); 

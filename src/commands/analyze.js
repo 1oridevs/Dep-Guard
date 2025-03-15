@@ -6,130 +6,114 @@ const policyChecker = require('../core/policy-checker');
 const logger = require('../utils/logger');
 const versionUtils = require('../utils/version-utils');
 const licenseUtils = require('../utils/license-utils');
+const DependencyScanner = require('../core/analyzers/dependency-scanner');
+const fs = require('fs').promises;
 
-async function analyzeCommand(program, config) {
-  program
-    .command('analyze')
-    .description('Perform advanced analysis on dependencies')
-    .option('--ci', 'Run in CI mode (exits with error code on issues)')
-    .option('--json', 'Output results in JSON format')
-    .option('--dev', 'Include devDependencies in analysis')
-    .action(async (options) => {
-      const spinner = ora('Initializing analysis...').start();
-      
-      try {
-        // Initialize license utils first
-        await licenseUtils.init();
+async function validateProjectPath(projectPath) {
+  try {
+    const stats = await fs.stat(projectPath);
+    if (!stats.isDirectory()) {
+      throw new Error('Project path must be a directory');
+    }
+    
+    const packageJsonPath = path.join(projectPath, 'package.json');
+    await fs.access(packageJsonPath);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw new Error('package.json not found in project directory');
+    }
+    throw error;
+  }
+}
 
-        // Create analysis object with initial structure
-        const analysis = {
-          summary: {
-            total: 0,
-            issues: 0,
-            critical: 0,
-            updates: {
-              major: 0,
-              minor: 0,
-              patch: 0,
-              prerelease: 0
-            },
-            licenses: {
-              unknown: 0,
-              invalid: 0
-            }
-          },
-          dependencies: []
-        };
+async function analyzeCommand(options = {}) {
+  try {
+    // Validate project path
+    const projectPath = options.path || process.cwd();
+    await validateProjectPath(projectPath);
 
-        // Read package.json
-        spinner.text = 'Reading package.json...';
-        const packageJson = await dependencyScanner.readPackageJson(process.cwd());
-        const dependencies = {
-          ...packageJson.dependencies,
-          ...(options.dev ? packageJson.devDependencies : {})
-        };
+    const scanner = new DependencyScanner();
+    
+    // Read and validate package.json
+    let packageJson;
+    try {
+      packageJson = await scanner.readPackageJson(projectPath);
+    } catch (error) {
+      throw new Error(`Failed to parse package.json: ${error.message}`);
+    }
 
-        if (!dependencies || Object.keys(dependencies).length === 0) {
-          spinner.info('No dependencies found');
-          return;
-        }
+    // Get dependencies to analyze
+    const dependencies = {
+      ...packageJson.dependencies,
+      ...(options.dev ? packageJson.devDependencies : {})
+    };
 
-        // Scan dependencies
-        spinner.text = 'Scanning dependencies...';
-        const results = await dependencyScanner.scanDependencies(dependencies);
-        analysis.summary.total = results.length;
-
-        // Process each dependency
-        spinner.text = 'Analyzing dependencies...';
-        analysis.dependencies = results.map(dep => {
-          const issues = [];
-
-          // Check version
-          if (!dep.version || !versionUtils.parseVersion(dep.version)) {
-            issues.push({
-              type: 'version',
-              level: 'warning',
-              message: `Invalid version format: ${dep.version}`
-            });
-          }
-
-          // Check updates
-          if (dep.updateType && dep.updateType !== 'current') {
-            const level = dep.updateType === 'major' ? 'high' : 'warning';
-            issues.push({
-              type: 'update',
-              level,
-              message: `${dep.updateType} update available (${dep.version} → ${dep.latestVersion})`
-            });
-            if (analysis.summary.updates[dep.updateType] !== undefined) {
-              analysis.summary.updates[dep.updateType]++;
-            }
-          }
-
-          // Check license
-          if (!dep.license || dep.license === 'UNKNOWN') {
-            issues.push({
-              type: 'license',
-              level: 'warning',
-              message: 'No license information found'
-            });
-            analysis.summary.licenses.unknown++;
-          }
-
-          // Update summary counts
-          analysis.summary.issues += issues.length;
-          analysis.summary.critical += issues.filter(i => i.level === 'high').length;
-
-          return {
-            name: dep.name,
-            version: dep.version,
-            latestVersion: dep.latestVersion,
-            updateType: dep.updateType,
-            license: dep.license,
-            issues
-          };
-        });
-
-        spinner.succeed('Analysis complete!');
-
-        // Output results
-        if (options.json) {
-          console.log(JSON.stringify(analysis, null, 2));
-        } else {
-          displayAnalysis(analysis);
-        }
-
-        // Exit with error code in CI mode if there are critical issues
-        if (options.ci && analysis.summary.critical > 0) {
-          process.exit(1);
-        }
-
-      } catch (error) {
-        spinner.fail(chalk.red(`Analysis failed: ${error.message}`));
-        logger.debug('Error details:', error);
-        process.exit(1);
+    if (!dependencies || Object.keys(dependencies).length === 0) {
+      const message = 'No dependencies found';
+      if (options.json) {
+        console.log(JSON.stringify({
+          summary: { total: 0 },
+          dependencies: [],
+          message
+        }));
+      } else {
+        logger.info(message);
       }
-    });
+      return;
+    }
+
+    // Scan dependencies with timeout
+    const timeoutMs = options.timeout || 30000;
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Analysis timed out')), timeoutMs)
+    );
+
+    const results = await Promise.race([
+      scanner.scanDependencies(dependencies),
+      timeoutPromise
+    ]);
+
+    // Format and output results
+    if (options.json) {
+      console.log(JSON.stringify({
+        summary: {
+          total: results.length,
+          outdated: results.filter(r => r.updateType !== 'none').length,
+          errors: results.filter(r => r.error).length
+        },
+        dependencies: results
+      }, null, 2));
+    } else {
+      logger.info('Dependency Analysis Report');
+      logger.info('--------------------------');
+      
+      results.forEach(dep => {
+        if (dep.error) {
+          logger.error(`✗ ${dep.name}@${dep.version} - ${dep.error}`);
+        } else {
+          const status = dep.updateType === 'none' ? '✓' : '!';
+          logger.info(`${status} ${dep.name}@${dep.version} -> ${dep.latestVersion}`);
+        }
+      });
+
+      logger.info('\nSummary:');
+      logger.info(`Total Dependencies: ${results.length}`);
+      logger.info(`Outdated: ${results.filter(r => r.updateType !== 'none').length}`);
+      logger.info(`Errors: ${results.filter(r => r.error).length}`);
+    }
+
+    // Exit with error code if required
+    if (options.strict && results.some(r => r.error || r.updateType !== 'none')) {
+      process.exit(1);
+    }
+  } catch (error) {
+    logger.error('Analysis failed:', error.message);
+    if (options.debug) {
+      logger.debug('Stack trace:', error.stack);
+    }
+    process.exit(1);
+  }
 }
 
 function displayAnalysis(analysis) {

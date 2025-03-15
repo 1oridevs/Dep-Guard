@@ -3,8 +3,17 @@ const path = require('path');
 const envUtils = require('../../../src/utils/env-utils');
 
 describe('EnvUtils', () => {
-  const testEnvPath = path.join(__dirname, 'test.env');
+  const testDir = path.join(__dirname, '../../fixtures/env-test');
+  const testEnvPath = path.join(testDir, 'test.env');
   const originalEnv = { ...process.env };
+
+  beforeAll(async () => {
+    await fs.mkdir(testDir, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await fs.rm(testDir, { recursive: true, force: true });
+  });
 
   beforeEach(() => {
     // Reset process.env

@@ -1,6 +1,6 @@
 {
   "name": "dependency-guardian",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "A powerful dependency management and analysis tool for Node.js projects",
   "main": "src/index.js",
   "bin": {
@@ -40,6 +40,7 @@
     "cli-progress": "^3.12.0",
     "commander": "^11.0.0",
     "cosmiconfig": "^9.0.0",
+    "dotenv": "^16.4.5",
     "dependency-tree": "^11.1.1",
     "glob": "^10.3.10",
     "inquirer": "^8.2.6",

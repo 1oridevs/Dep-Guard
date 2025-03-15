@@ -2,6 +2,8 @@ const { exec } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
 const logger = require('./logger');
+const fs = require('fs').promises;
+const path = require('path');
 
 class PackageUtils {
   constructor() {
@@ -64,11 +66,11 @@ class PackageUtils {
 
     switch (manager) {
       case 'yarn':
-        return `yarn add ${dev ? '-D' : ''} ${exact ? '--exact' : ''} ${deps.join(' ')}`;
+        return `yarn add${dev ? ' -D' : ''}${exact ? ' --exact' : ''} ${deps.join(' ')}`;
       case 'pnpm':
-        return `pnpm add ${dev ? '-D' : ''} ${exact ? '--save-exact' : ''} ${deps.join(' ')}`;
+        return `pnpm add${dev ? ' -D' : ''}${exact ? ' --save-exact' : ''} ${deps.join(' ')}`;
       default: // npm
-        return `npm install ${dev ? '--save-dev' : '--save'} ${exact ? '--save-exact' : ''} ${deps.join(' ')}`;
+        return `npm install${dev ? ' --save-dev' : ' --save'}${exact ? ' --save-exact' : ''} ${deps.join(' ')}`;
     }
   }
 

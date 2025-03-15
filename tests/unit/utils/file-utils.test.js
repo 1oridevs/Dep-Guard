@@ -2,6 +2,11 @@ const fileUtils = require('../../../src/utils/file-utils');
 const fs = require('fs').promises;
 const path = require('path');
 
+jest.mock('../../../src/utils/logger', () => ({
+  debug: jest.fn(),
+  error: jest.fn()
+}));
+
 describe('FileUtils', () => {
   const testDir = path.join(__dirname, 'test-files');
   const testFile = path.join(testDir, 'test.json');
