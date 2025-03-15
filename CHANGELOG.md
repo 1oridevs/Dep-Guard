@@ -82,3 +82,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced security scanning capabilities
 - Added policy-based security controls
 - Improved vulnerability reporting
+
+
+## [1.1.1] - 2025-03-15
+
+### Added
+- New `audit` command for detailed security analysis
+  - Configurable severity levels
+  - Automatic vulnerability fixing
+  - JSON and file report outputs
+- New `init` command for easy configuration setup
+  - Interactive prompts for settings
+  - Template configuration generation
+- Enhanced dependency analysis
+  - Bundle size tracking
+  - Impact analysis
+  - Size optimization suggestions
+- Improved error handling and reporting
+- Better progress indicators
+- Configuration validation
+- New Logo
+- Small Fixes to the README
