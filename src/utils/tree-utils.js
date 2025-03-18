@@ -50,42 +50,26 @@ class TreeUtils {
     }));
   }
 
-  formatTreeOutput(tree, options = {}) {
-    const lines = [];
-    const maxDepth = options.maxDepth || Infinity;
-
-    function traverse(node, prefix = '', depth = 0) {
-      if (!node || depth > maxDepth) return;
-
-      // Add root node
-      if (depth === 0) {
-        lines.push(node.name || 'root');
-      }
-
-      // Process children
-      if (node.children && depth < maxDepth) {
-        const children = Array.isArray(node.children) ? node.children : [];
-        children.forEach((child, index) => {
-          const isLast = index === children.length - 1;
-          const linePrefix = isLast ? this.symbols.lastBranch : this.symbols.branch;
-          const childPrefix = isLast ? this.symbols.space : this.symbols.vertical;
-          
-          lines.push(prefix + linePrefix + (child.name || child));
-          
-          if (child.children) {
-            traverse.call(this, child, prefix + childPrefix, depth + 1);
-          }
-        });
-      }
+  formatTreeOutput(tree, prefix = '', isLast = true) {
+    let output = '';
+    const indent = prefix ? (isLast ? this.symbols.space : this.symbols.vertical) : '';
+    
+    // Add current node
+    if (tree.name) {
+      const marker = prefix ? (isLast ? this.symbols.lastBranch : this.symbols.branch) : '';
+      const version = tree.version ? chalk.gray(` v${tree.version}`) : '';
+      output += `${prefix}${marker}${tree.name}${version}\n`;
     }
 
-    try {
-      traverse.call(this, tree);
-      return lines.join('\n');
-    } catch (error) {
-      logger.error('Failed to format tree:', error);
-      throw error;
+    // Process children
+    if (tree.children && tree.children.length > 0) {
+      tree.children.forEach((child, index) => {
+        const isLastChild = index === tree.children.length - 1;
+        output += this.formatTreeOutput(child, prefix + indent, isLastChild);
+      });
     }
+
+    return output;
   }
 
   colorize(tree, getColor = () => chalk.white) {
