@@ -3,6 +3,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const logger = require('../../utils/logger');
 const cache = require('../../utils/cache');
+const { ValidationError } = require('../../utils/error-utils');
 
 class LockAnalyzer {
   constructor() {
@@ -12,158 +13,174 @@ class LockAnalyzer {
       yarn: 'yarn.lock',
       pnpm: 'pnpm-lock.yaml'
     };
+    this.supportedLockFiles = ['package-lock.json', 'yarn.lock'];
   }
 
   async analyzeLockFile(projectPath) {
-    const cacheKey = `lock:${projectPath}`;
-    const cached = this.cache.get(cacheKey);
-    if (cached) return cached;
-
     try {
-      const result = {
-        npm: await this.analyzeNpmLock(projectPath),
-        yarn: await this.analyzeYarnLock(projectPath),
-        pnpm: await this.analyzePnpmLock(projectPath),
-        summary: {
-          versionMismatches: [],
-          duplicates: [],
-          outdated: []
-        }
-      };
+      const lockFiles = await this.findLockFiles(projectPath);
+      if (!lockFiles.length) {
+        return null;
+      }
 
-      // Analyze version mismatches and duplicates
-      this.analyzeMismatches(result);
-      
-      this.cache.set(cacheKey, result);
-      return result;
+      const packageJson = await this.readPackageJson(projectPath);
+      if (!packageJson) {
+        return null;
+      }
+
+      const results = await Promise.all(
+        lockFiles.map(file => this.analyzeSingleLock(file, packageJson))
+      );
+
+      return {
+        summary: {
+          lockFiles: lockFiles.map(f => path.basename(f)),
+          versionMismatches: this.mergeMismatches(results),
+          totalDependencies: Object.keys(packageJson.dependencies || {}).length + 
+                           Object.keys(packageJson.devDependencies || {}).length
+        },
+        details: results.reduce((acc, result) => ({ ...acc, ...result.details }), {})
+      };
     } catch (error) {
       logger.error('Lock file analysis failed:', error);
       throw error;
     }
   }
 
-  async analyzeNpmLock(projectPath) {
-    try {
-      const lockPath = path.join(projectPath, this.lockFiles.npm);
-      const content = await fs.readFile(lockPath, 'utf8');
-      const lockfile = JSON.parse(content);
-
-      return {
-        version: lockfile.lockfileVersion || 1,
-        dependencies: this.flattenNpmDependencies(lockfile.dependencies || {})
-      };
-    } catch (error) {
-      logger.debug(`No npm lock file found: ${error.message}`);
-      return null;
-    }
-  }
-
-  async analyzeYarnLock(projectPath) {
-    try {
-      const lockPath = path.join(projectPath, this.lockFiles.yarn);
-      const content = await fs.readFile(lockPath, 'utf8');
-      
-      // Parse yarn.lock format
-      const dependencies = {};
-      const lines = content.split('\n');
-      let currentDep = null;
-
-      for (const line of lines) {
-        if (line.startsWith('"')) {
-          currentDep = line.split('"')[1];
-        } else if (line.includes('version') && currentDep) {
-          const version = line.split('"')[1];
-          dependencies[currentDep] = { version };
+  async findLockFiles(projectPath) {
+    const files = await Promise.all(
+      this.supportedLockFiles.map(async file => {
+        const fullPath = path.join(projectPath, file);
+        try {
+          await fs.access(fullPath);
+          return fullPath;
+        } catch {
+          return null;
         }
-      }
-
-      return {
-        dependencies,
-        type: 'yarn'
-      };
-    } catch (error) {
-      logger.debug(`No yarn lock file found: ${error.message}`);
-      return null;
-    }
+      })
+    );
+    return files.filter(Boolean);
   }
 
-  async analyzePnpmLock(projectPath) {
+  async readPackageJson(projectPath) {
     try {
-      const lockPath = path.join(projectPath, this.lockFiles.pnpm);
-      const content = await fs.readFile(lockPath, 'utf8');
-      const lockfile = yaml.load(content);
-
-      return {
-        dependencies: this.flattenPnpmDependencies(lockfile.dependencies || {}),
-        type: 'pnpm'
-      };
-    } catch (error) {
-      logger.debug(`No pnpm lock file found: ${error.message}`);
+      const content = await fs.readFile(
+        path.join(projectPath, 'package.json'),
+        'utf8'
+      );
+      return JSON.parse(content);
+    } catch {
       return null;
     }
   }
 
-  flattenNpmDependencies(deps, result = {}, prefix = '') {
-    for (const [name, info] of Object.entries(deps)) {
-      const fullName = prefix ? `${prefix}/${name}` : name;
-      result[fullName] = {
-        version: info.version,
-        resolved: info.resolved,
-        integrity: info.integrity
-      };
+  async analyzeSingleLock(lockFile, packageJson) {
+    const fileName = path.basename(lockFile);
+    const content = await fs.readFile(lockFile, 'utf8');
 
-      if (info.dependencies) {
-        this.flattenNpmDependencies(info.dependencies, result, fullName);
-      }
+    if (fileName === 'yarn.lock') {
+      return this.analyzeYarnLock(content, packageJson);
     }
-    return result;
+    return this.analyzeNpmLock(content, packageJson);
   }
 
-  flattenPnpmDependencies(deps) {
-    const result = {};
-    for (const [name, info] of Object.entries(deps)) {
-      result[name] = {
-        version: info.version,
-        resolved: info.resolved
-      };
-    }
-    return result;
-  }
+  async analyzeYarnLock(content, packageJson) {
+    try {
+      const yarnLock = yaml.load(content);
+      const mismatches = [];
+      const details = {};
 
-  analyzeMismatches(result) {
-    const versions = new Map();
-    const processed = new Set();
+      // Yarn v1 format
+      Object.entries(yarnLock).forEach(([key, info]) => {
+        const [name, requestedVersion] = key.split('@');
+        if (!requestedVersion) return;
 
-    // Helper to process dependencies
-    const processDeps = (deps, type) => {
-      if (!deps) return;
+        const packageVersion = this.findPackageVersion(name, packageJson);
+        if (!packageVersion) return;
 
-      Object.entries(deps).forEach(([name, info]) => {
-        if (!versions.has(name)) {
-          versions.set(name, new Map());
+        const resolvedVersion = info.version;
+        details[name] = {
+          requested: packageVersion,
+          resolved: resolvedVersion,
+          type: this.getVersionMismatchType(packageVersion, resolvedVersion)
+        };
+
+        if (!this.versionsMatch(packageVersion, resolvedVersion)) {
+          mismatches.push({
+            name,
+            expected: packageVersion,
+            actual: resolvedVersion
+          });
         }
-        versions.get(name).set(type, info.version);
       });
-    };
 
-    // Process all lock files
-    if (result.npm?.dependencies) {
-      processDeps(result.npm.dependencies, 'npm');
+      return { mismatches, details };
+    } catch (error) {
+      logger.error('Failed to parse yarn.lock:', error);
+      throw new ValidationError('Invalid yarn.lock file');
     }
-    if (result.yarn?.dependencies) {
-      processDeps(result.yarn.dependencies, 'yarn');
-    }
-    if (result.pnpm?.dependencies) {
-      processDeps(result.pnpm.dependencies, 'pnpm');
-    }
+  }
 
-    // Check for mismatches
-    versions.forEach((typeVersions, name) => {
-      const uniqueVersions = new Set(typeVersions.values());
-      if (uniqueVersions.size > 1) {
-        result.summary.versionMismatches.push(name);
-      }
-    });
+  async analyzeNpmLock(content, packageJson) {
+    try {
+      const npmLock = JSON.parse(content);
+      const mismatches = [];
+      const details = {};
+
+      Object.entries(npmLock.packages || {}).forEach(([pkgPath, info]) => {
+        if (pkgPath === '') return; // Skip root package
+
+        const name = pkgPath.split('node_modules/')[1];
+        const packageVersion = this.findPackageVersion(name, packageJson);
+        if (!packageVersion) return;
+
+        const resolvedVersion = info.version;
+        details[name] = {
+          requested: packageVersion,
+          resolved: resolvedVersion,
+          type: this.getVersionMismatchType(packageVersion, resolvedVersion)
+        };
+
+        if (!this.versionsMatch(packageVersion, resolvedVersion)) {
+          mismatches.push({
+            name,
+            expected: packageVersion,
+            actual: resolvedVersion
+          });
+        }
+      });
+
+      return { mismatches, details };
+    } catch (error) {
+      logger.error('Failed to parse package-lock.json:', error);
+      throw new ValidationError('Invalid package-lock.json file');
+    }
+  }
+
+  findPackageVersion(name, packageJson) {
+    return (packageJson.dependencies || {})[name] ||
+           (packageJson.devDependencies || {})[name];
+  }
+
+  versionsMatch(expected, actual) {
+    // Remove leading ^ or ~ from expected version
+    const cleanExpected = expected.replace(/^[\^~]/, '');
+    return cleanExpected === actual;
+  }
+
+  getVersionMismatchType(expected, actual) {
+    if (this.versionsMatch(expected, actual)) return 'match';
+    if (expected.startsWith('^')) return 'compatible';
+    if (expected.startsWith('~')) return 'patch';
+    return 'mismatch';
+  }
+
+  mergeMismatches(results) {
+    return results
+      .flatMap(r => r.mismatches)
+      .filter((mismatch, index, array) => 
+        array.findIndex(m => m.name === mismatch.name) === index
+      );
   }
 }
 
