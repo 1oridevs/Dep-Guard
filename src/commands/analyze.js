@@ -10,7 +10,7 @@ const DependencyScanner = require('../core/analyzers/dependency-scanner');
 const fs = require('fs').promises;
 const { DependencyGuardianError, NetworkError, ValidationError } = require('../utils/error-utils');
 const securityChecker = require('../core/checkers/security-checker');
-const { convertToCSV, convertToHTML } = require('../utils/formatters');
+const { convertToCSV, convertToHTML, formatAnalysisReport } = require('../utils/formatters');
 
 async function validateProjectPath(projectPath) {
   try {
@@ -30,110 +30,73 @@ async function validateProjectPath(projectPath) {
   }
 }
 
-function analyzeCommand(program) {
+async function analyzeCommand(program) {
   program
     .command('analyze')
     .description('Analyze project dependencies')
-    .option('-f, --format <type>', 'Output format (table, json, csv, html)', 'table')
-    .option('-o, --output <file>', 'Output file path')
+    .option('-j, --json', 'Output in JSON format')
+    .option('-o, --output <file>', 'Write output to file')
+    .option('--strict', 'Exit with error on any issues')
     .action(async (options) => {
       const spinner = ora('Analyzing dependencies...').start();
-      
+
       try {
-        // Validate project path
-        const projectPath = options.path || process.cwd();
-        try {
-          await validateProjectPath(projectPath);
-        } catch (error) {
-          throw new ValidationError(`Invalid project path: ${error.message}`, {
-            path: projectPath
-          });
-        }
-
-        const scanner = new DependencyScanner({
-          registry: options.registry,
-          maxRetries: options.maxRetries || 3,
-          timeout: options.timeout || 30000,
-          cacheTimeout: options.cacheTimeout || 3600000
-        });
-        
-        // Read and validate package.json
-        let packageJson;
-        try {
-          packageJson = await scanner.readPackageJson(projectPath);
-        } catch (error) {
-          throw new ValidationError('Failed to parse package.json', {
-            path: projectPath,
-            error: error.message
-          });
-        }
-
-        // Get dependencies to analyze
+        // Read package.json and analyze dependencies
+        const packageJson = await dependencyScanner.readPackageJson(process.cwd());
         const dependencies = {
           ...packageJson.dependencies,
-          ...(options.dev ? packageJson.devDependencies : {})
+          ...packageJson.devDependencies
         };
 
-        if (!dependencies || Object.keys(dependencies).length === 0) {
-          const message = 'No dependencies found';
+        if (!Object.keys(dependencies).length) {
+          spinner.succeed('Analysis complete');
           if (options.json) {
             console.log(JSON.stringify({
-              summary: { total: 0 },
-              dependencies: [],
-              message
+              summary: { total: 0, issues: 0 },
+              dependencies: []
             }));
           } else {
-            logger.info(message);
+            console.log('\nNo dependencies found');
           }
           return;
         }
 
-        // Scan dependencies with timeout
-        const timeoutMs = options.timeout || 30000;
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Analysis timed out')), timeoutMs)
-        );
+        // Scan dependencies
+        const results = await dependencyScanner.scanDependencies(dependencies);
+        spinner.succeed('Analysis complete');
 
-        const results = await Promise.race([
-          scanner.scanDependencies(dependencies),
-          timeoutPromise
-        ]);
+        // Process results
+        const analysis = {
+          summary: {
+            total: results.length,
+            issues: results.filter(r => r.error || r.issues?.length > 0).length
+          },
+          dependencies: results
+        };
 
-        // Format and output results
+        // Output results
         if (options.json) {
-          console.log(JSON.stringify({
-            summary: {
-              total: results.length,
-              outdated: results.filter(r => r.updateType !== 'none').length,
-              errors: results.filter(r => r.error).length
-            },
-            dependencies: results
-          }, null, 2));
+          console.log(JSON.stringify(analysis, null, 2));
         } else {
-          logger.info('Dependency Analysis Report');
-          logger.info('--------------------------');
-          
-          results.forEach(dep => {
-            if (dep.error) {
-              logger.error(`✗ ${dep.name}@${dep.version} - ${dep.error}`);
-            } else {
-              const status = dep.updateType === 'none' ? '✓' : '!';
-              logger.info(`${status} ${dep.name}@${dep.version} -> ${dep.latestVersion}`);
-            }
-          });
-
-          logger.info('\nSummary:');
-          logger.info(`Total Dependencies: ${results.length}`);
-          logger.info(`Outdated: ${results.filter(r => r.updateType !== 'none').length}`);
-          logger.info(`Errors: ${results.filter(r => r.error).length}`);
+          console.log(formatAnalysisReport(analysis));
         }
 
-        // Exit with error code if required
-        if (options.strict && results.some(r => r.error || r.updateType !== 'none')) {
+        // Write to file if specified
+        if (options.output) {
+          const outputPath = path.resolve(options.output);
+          await fs.writeFile(outputPath, 
+            options.json ? JSON.stringify(analysis, null, 2) : formatAnalysisReport(analysis)
+          );
+          logger.info(`Report written to ${outputPath}`);
+        }
+
+        // Handle strict mode
+        if (options.strict && analysis.summary.issues > 0) {
           process.exit(1);
         }
+
       } catch (error) {
-        spinner.fail(chalk.red('Analysis failed'));
+        spinner.fail('Analysis failed');
         logger.error('Analysis error:', error);
         process.exit(1);
       }
