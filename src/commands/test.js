@@ -2,6 +2,10 @@ const ora = require('ora');
 const chalk = require('chalk');
 const testUtils = require('../utils/test-utils');
 const logger = require('../utils/logger');
+const { exec } = require('child_process');
+const util = require('util');
+
+const execPromise = util.promisify(exec);
 
 function testCommand(program) {
   program
@@ -19,45 +23,28 @@ function testCommand(program) {
         await testUtils.setupTestEnvironment(options);
         spinner.succeed('Test environment ready');
 
-        if (options.setupOnly) {
-          console.log(chalk.blue('\nTest environment is ready for manual testing'));
+        if (options['setup-only']) {
           return;
         }
 
-        // Run tests
+        // Determine test command based on type
+        let cmd = 'npm run test';
+        if (options.type !== 'all') {
+          cmd = `npm run test:${options.type}`;
+        }
+
+        // Add flags
+        if (options.watch) cmd += ' -- --watch';
+        if (options.coverage) cmd += ' -- --coverage';
+
         spinner.start('Running tests...');
-        const command = testUtils.getTestCommand(options.type);
-        
-        if (options.watch) {
-          command += ' --watch';
-        }
-        
-        if (options.coverage) {
-          command += ' --coverage';
-        }
-
-        const success = await testUtils.runTests(options.type);
-
-        if (success) {
-          spinner.succeed(chalk.green('All tests passed'));
-          
-          if (options.coverage) {
-            console.log('\nCoverage report generated in coverage/');
-          }
-        } else {
-          spinner.fail(chalk.red('Tests failed'));
-          process.exit(1);
-        }
+        await execPromise(cmd);
+        spinner.succeed('Tests completed successfully');
 
       } catch (error) {
-        spinner.fail('Test execution failed');
+        spinner.fail(`Tests failed (${options.type}): ${error.message}`);
         logger.error('Test error:', error);
         process.exit(1);
-      } finally {
-        // Cleanup unless in watch mode
-        if (!options.watch) {
-          await testUtils.cleanup();
-        }
       }
     });
 }
