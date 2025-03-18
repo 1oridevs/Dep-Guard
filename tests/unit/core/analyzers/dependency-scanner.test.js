@@ -1,7 +1,15 @@
 const dependencyScanner = require('../../../../src/core/analyzers/dependency-scanner');
 const axios = require('axios');
+const fs = require('fs').promises;
+const path = require('path');
+const { ValidationError, NetworkError } = require('../../../../src/utils/error-utils');
 
 jest.mock('axios');
+jest.mock('fs', () => ({
+  promises: {
+    readFile: jest.fn(),
+  }
+}));
 
 describe('DependencyScanner', () => {
   beforeEach(() => {
@@ -9,93 +17,94 @@ describe('DependencyScanner', () => {
     dependencyScanner.cache.clear();
   });
 
-  describe('getPackageInfo', () => {
-    test('should fetch and cache package info', async () => {
-      const mockData = {
-        'dist-tags': { latest: '2.0.0' },
-        versions: {
-          '2.0.0': { license: 'MIT' }
-        }
-      };
-
-      axios.get.mockResolvedValueOnce({ data: mockData });
-
-      const result = await dependencyScanner.getPackageInfo('test-package');
-      expect(result).toEqual(mockData);
-      expect(axios.get).toHaveBeenCalledWith('https://registry.npmjs.org/test-package');
+  describe('readPackageJson', () => {
+    it('should throw ValidationError for invalid path', async () => {
+      await expect(dependencyScanner.readPackageJson())
+        .rejects
+        .toThrow(ValidationError);
+      
+      await expect(dependencyScanner.readPackageJson(null))
+        .rejects
+        .toThrow('Invalid project path provided');
     });
 
-    it('should handle network errors', async () => {
-      axios.get.mockRejectedValueOnce(new Error('Network error'));
-      const result = await dependencyScanner.getPackageInfo('test-package');
-      expect(result).toBeNull();
+    it('should throw ValidationError when package.json not found', async () => {
+      fs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      
+      await expect(dependencyScanner.readPackageJson('/fake/path'))
+        .rejects
+        .toThrow('package.json not found in specified path');
+    });
+
+    it('should throw ValidationError for invalid JSON', async () => {
+      fs.readFile.mockResolvedValue('invalid json');
+      
+      await expect(dependencyScanner.readPackageJson('/fake/path'))
+        .rejects
+        .toThrow('Invalid package.json format');
+    });
+
+    it('should successfully read valid package.json', async () => {
+      const mockPackage = { name: 'test', version: '1.0.0' };
+      fs.readFile.mockResolvedValue(JSON.stringify(mockPackage));
+      
+      const result = await dependencyScanner.readPackageJson('/test/path');
+      expect(result).toEqual(mockPackage);
+    });
+  });
+
+  describe('getPackageInfo', () => {
+    it('should throw ValidationError for invalid package name', async () => {
+      await expect(dependencyScanner.getPackageInfo())
+        .rejects
+        .toThrow('Invalid package name');
+    });
+
+    it('should handle 404 errors', async () => {
+      axios.get.mockRejectedValue({ response: { status: 404 } });
+      
+      await expect(dependencyScanner.getPackageInfo('nonexistent-pkg'))
+        .rejects
+        .toThrow('Package nonexistent-pkg not found');
+    });
+
+    it('should retry on network errors', async () => {
+      axios.get.mockRejectedValue(new Error('Network error'));
+      
+      await expect(dependencyScanner.getPackageInfo('test-pkg'))
+        .rejects
+        .toThrow(NetworkError);
+      
+      expect(axios.get).toHaveBeenCalledTimes(dependencyScanner.maxRetries);
+    });
+
+    it('should validate package info structure', async () => {
+      axios.get.mockResolvedValue({ data: { invalid: 'structure' } });
+      
+      await expect(dependencyScanner.getPackageInfo('test-pkg'))
+        .rejects
+        .toThrow('Invalid package info returned for test-pkg');
+    });
+
+    it('should cache successful responses', async () => {
+      const mockData = {
+        'dist-tags': { latest: '1.0.0' },
+        versions: {
+          '1.0.0': { license: 'MIT' }
+        }
+      };
+      
+      axios.get.mockResolvedValue({ data: mockData });
+      
+      await dependencyScanner.getPackageInfo('test-pkg');
+      await dependencyScanner.getPackageInfo('test-pkg');
+      
+      expect(axios.get).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('scanDependencies', () => {
-    test('should scan multiple dependencies', async () => {
-      const mockDeps = {
-        'package-1': '^1.0.0',
-        'package-2': '~2.0.0'
-      };
-
-      const mockPackageInfo = {
-        'dist-tags': { latest: '2.0.0' },
-        versions: {
-          '2.0.0': { license: 'MIT' }
-        }
-      };
-
-      axios.get.mockResolvedValue({ data: mockPackageInfo });
-
-      const results = await dependencyScanner.scanDependencies(mockDeps);
-      expect(results).toHaveLength(2);
-      expect(results[0]).toHaveProperty('name');
-      expect(results[0]).toHaveProperty('version');
-      expect(results[0]).toHaveProperty('latestVersion');
-    });
-
-    it('should handle invalid package info', async () => {
-      axios.get.mockResolvedValueOnce({ data: null });
-
-      const results = await dependencyScanner.scanDependencies({
-        'test-package': '1.0.0'
-      });
-
-      expect(results[0]).toHaveProperty('error');
-      expect(results[0].error).toBe('No package info returned');
-    });
-
-    it('should handle network errors', async () => {
-      const mockError = new Error('Network error');
-      axios.get.mockRejectedValueOnce(mockError);
-
-      const results = await dependencyScanner.scanDependencies({
-        'test-package': '1.0.0'
-      });
-
-      expect(results[0]).toEqual({
-        name: 'test-package',
-        version: '1.0.0',
-        error: 'Network error'
-      });
-    });
-
-    it('should handle missing package info', async () => {
-      axios.get.mockResolvedValueOnce({ data: null });
-
-      const results = await dependencyScanner.scanDependencies({
-        'test-package': '1.0.0'
-      });
-
-      expect(results[0]).toEqual({
-        name: 'test-package',
-        version: '1.0.0',
-        error: 'No package info returned'
-      });
-    });
-
-    it('should handle invalid dependencies input', async () => {
+    it('should throw ValidationError for invalid dependencies input', async () => {
       await expect(dependencyScanner.scanDependencies(null))
         .rejects
         .toThrow('Invalid dependencies object');
@@ -103,6 +112,48 @@ describe('DependencyScanner', () => {
       await expect(dependencyScanner.scanDependencies('not-an-object'))
         .rejects
         .toThrow('Invalid dependencies object');
+    });
+
+    it('should handle package info errors gracefully', async () => {
+      const dependencies = {
+        'test-pkg': '1.0.0'
+      };
+
+      axios.get.mockRejectedValue(new Error('Network error'));
+      
+      const results = await dependencyScanner.scanDependencies(dependencies);
+      
+      expect(results[0]).toMatchObject({
+        name: 'test-pkg',
+        version: '1.0.0',
+        error: expect.any(String),
+        type: 'network'
+      });
+    });
+
+    it('should analyze valid dependencies', async () => {
+      const dependencies = {
+        'test-pkg': '1.0.0'
+      };
+
+      const mockData = {
+        'dist-tags': { latest: '2.0.0' },
+        versions: {
+          '2.0.0': { license: 'MIT' }
+        }
+      };
+
+      axios.get.mockResolvedValue({ data: mockData });
+      
+      const results = await dependencyScanner.scanDependencies(dependencies);
+      
+      expect(results[0]).toMatchObject({
+        name: 'test-pkg',
+        version: '1.0.0',
+        currentVersion: '2.0.0',
+        latestVersion: '2.0.0',
+        license: 'MIT'
+      });
     });
   });
 }); 

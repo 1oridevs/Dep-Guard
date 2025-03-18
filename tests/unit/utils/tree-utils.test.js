@@ -5,7 +5,7 @@ describe('TreeUtils', () => {
   const testProjectPath = path.join(__dirname, 'test-project');
 
   describe('formatTreeOutput', () => {
-    test('should format tree correctly', () => {
+    test('should format simple tree correctly', () => {
       const tree = {
         name: 'index.js',
         children: [
@@ -17,13 +17,37 @@ describe('TreeUtils', () => {
         ]
       };
 
-      const result = treeUtils.formatTreeOutput(tree);
-      const lines = result.split('\n');
+      const expected = 
+        'index.js\n' +
+        '├── a.js\n' +
+        '│   └── c.js\n' +
+        '└── b.js\n';
 
-      expect(lines[0]).toBe('index.js');
-      expect(lines[1]).toBe('├── a.js');
-      expect(lines[2]).toBe('│   └── c.js');
-      expect(lines[3]).toBe('└── b.js');
+      const result = treeUtils.formatTreeOutput(tree);
+      expect(result).toBe(expected);
+    });
+
+    test('should include versions when available', () => {
+      const tree = {
+        name: 'root',
+        version: '1.0.0',
+        children: [
+          {
+            name: 'child',
+            version: '2.0.0'
+          }
+        ]
+      };
+
+      const result = treeUtils.formatTreeOutput(tree);
+      expect(result).toContain('root v1.0.0');
+      expect(result).toContain('└── child v2.0.0');
+    });
+
+    test('should handle empty tree', () => {
+      const tree = { name: 'empty' };
+      const result = treeUtils.formatTreeOutput(tree);
+      expect(result).toBe('empty\n');
     });
 
     test('should respect maxDepth option', () => {
