@@ -1,0 +1,7 @@
+{
+  "name": "test-project",
+  "dependencies": {
+    "mock-package": "1.0.0",
+    "test-lib": "2.0.0"
+  }
+}

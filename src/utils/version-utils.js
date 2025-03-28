@@ -12,34 +12,42 @@ class VersionUtils {
       /^(\d{8}|\d{14})$/,               // Date-based versions
       /^latest|stable|current$/          // Special keywords
     ];
+    this.updateTypes = {
+      MAJOR: 'major',
+      MINOR: 'minor',
+      PATCH: 'patch',
+      CURRENT: 'current'
+    };
   }
 
   parseVersion(version) {
     try {
-      // Remove any leading ^ or ~
+      // Remove leading ^ or ~ if present
       const cleanVersion = version.replace(/^[\^~]/, '');
       
-      if (!semver.valid(cleanVersion)) {
-        return null;
-      }
+      // Parse the version
+      const parsed = semver.parse(cleanVersion);
+      if (!parsed) return null;
 
       return {
         version: cleanVersion,
-        isPreRelease: Boolean(semver.prerelease(cleanVersion)),
-        type: 'semver'
+        isPreRelease: parsed.prerelease.length > 0,
+        major: parsed.major,
+        minor: parsed.minor,
+        patch: parsed.patch,
+        prerelease: parsed.prerelease,
+        range: version.startsWith('^') ? 'caret' : 
+               version.startsWith('~') ? 'tilde' : 'exact'
       };
     } catch (error) {
+      logger.debug(`Failed to parse version: ${version}`, error);
       return null;
     }
   }
 
   isPreRelease(version) {
-    const parsed = semver.parse(version);
-    if (!parsed) return false;
-    return parsed.prerelease.length > 0 || 
-           this.preReleaseIdentifiers.some(id => 
-             version.toLowerCase().includes(id)
-           );
+    const parsed = this.parseVersion(version);
+    return parsed ? parsed.isPreRelease : false;
   }
 
   compareVersions(version1, version2) {
@@ -59,34 +67,32 @@ class VersionUtils {
     return parts.map(p => p.padStart(5, '0')).join('.');
   }
 
-  determineUpdateType(currentVersion, latestVersion) {
+  determineUpdateType(currentVersion, newVersion) {
     try {
-      const current = semver.clean(currentVersion);
-      const latest = semver.clean(latestVersion);
-
-      if (!current || !latest) {
-        return 'unknown';
+      if (!semver.valid(currentVersion) || !semver.valid(newVersion)) {
+        throw new Error('Invalid version format');
       }
 
-      if (current === latest) {
-        return 'current';
+      if (semver.eq(currentVersion, newVersion)) {
+        return this.updateTypes.CURRENT;
       }
 
-      if (semver.major(latest) > semver.major(current)) {
-        return 'major';
+      if (semver.major(newVersion) > semver.major(currentVersion)) {
+        return this.updateTypes.MAJOR;
       }
 
-      if (semver.minor(latest) > semver.minor(current)) {
-        return 'minor';
+      if (semver.minor(newVersion) > semver.minor(currentVersion)) {
+        return this.updateTypes.MINOR;
       }
 
-      if (semver.patch(latest) > semver.patch(current)) {
-        return 'patch';
+      if (semver.patch(newVersion) > semver.patch(currentVersion)) {
+        return this.updateTypes.PATCH;
       }
 
-      return 'unknown';
+      return this.updateTypes.CURRENT;
     } catch (error) {
-      return 'unknown';
+      logger.error('Version comparison failed:', error);
+      throw error;
     }
   }
 
@@ -95,8 +101,105 @@ class VersionUtils {
   }
 
   satisfies(version, range) {
-    return semver.satisfies(version, range);
+    try {
+      return semver.satisfies(version, range);
+    } catch (error) {
+      logger.error('Version satisfaction check failed:', error);
+      return false;
+    }
+  }
+
+  getLatestSatisfying(versions, range) {
+    try {
+      return semver.maxSatisfying(versions, range);
+    } catch (error) {
+      logger.error('Latest satisfying version check failed:', error);
+      return null;
+    }
+  }
+
+  sortVersions(versions, ascending = true) {
+    try {
+      const sorted = versions.sort(semver.compare);
+      return ascending ? sorted : sorted.reverse();
+    } catch (error) {
+      logger.error('Version sorting failed:', error);
+      return versions;
+    }
   }
 }
 
-module.exports = new VersionUtils(); 
+class VersionChecker {
+  constructor() {
+    this.updateTypes = {
+      MAJOR: 'major',
+      MINOR: 'minor',
+      PATCH: 'patch',
+      NONE: 'none'
+    };
+  }
+
+  getUpdateType(currentVersion, latestVersion) {
+    try {
+      if (!semver.valid(currentVersion) || !semver.valid(latestVersion)) {
+        throw new Error('Invalid version format');
+      }
+
+      if (semver.gt(latestVersion, currentVersion)) {
+        if (semver.major(latestVersion) > semver.major(currentVersion)) {
+          return this.updateTypes.MAJOR;
+        }
+        if (semver.minor(latestVersion) > semver.minor(currentVersion)) {
+          return this.updateTypes.MINOR;
+        }
+        if (semver.patch(latestVersion) > semver.patch(currentVersion)) {
+          return this.updateTypes.PATCH;
+        }
+      }
+      return this.updateTypes.NONE;
+    } catch (error) {
+      logger.error('Version comparison failed:', error);
+      throw error;
+    }
+  }
+
+  isUpdateSafe(currentVersion, newVersion) {
+    const updateType = this.getUpdateType(currentVersion, newVersion);
+    return updateType === this.updateTypes.PATCH || updateType === this.updateTypes.MINOR;
+  }
+
+  getSafeUpdate(currentVersion, availableVersions) {
+    try {
+      const validVersions = availableVersions
+        .filter(v => semver.valid(v))
+        .sort(semver.rcompare);
+
+      return validVersions.find(version => 
+        this.isUpdateSafe(currentVersion, version)
+      ) || currentVersion;
+    } catch (error) {
+      logger.error('Safe update check failed:', error);
+      return currentVersion;
+    }
+  }
+
+  formatUpdateType(type) {
+    const colors = {
+      [this.updateTypes.MAJOR]: 'red',
+      [this.updateTypes.MINOR]: 'yellow',
+      [this.updateTypes.PATCH]: 'green',
+      [this.updateTypes.NONE]: 'blue'
+    };
+
+    return {
+      type,
+      color: colors[type] || 'white',
+      isSafe: type === this.updateTypes.PATCH || type === this.updateTypes.MINOR
+    };
+  }
+}
+
+module.exports = {
+  VersionUtils: new VersionUtils(),
+  VersionChecker: new VersionChecker()
+}; 

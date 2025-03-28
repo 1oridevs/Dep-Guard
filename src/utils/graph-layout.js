@@ -4,79 +4,92 @@ const logger = require('./logger');
 class GraphLayoutManager {
   constructor() {
     this.layouts = {
-      force: this.forceLayout,
-      radial: this.radialLayout,
-      hierarchical: this.hierarchicalLayout
+      force: this.forceLayout.bind(this),
+      radial: this.radialLayout.bind(this),
+      hierarchical: this.hierarchicalLayout.bind(this)
     };
   }
 
   async calculateLayout(nodes, edges, options = {}) {
-    const {
-      type = 'force',
-      width = 800,
-      height = 600,
-      padding = 40
-    } = options;
+    const { type = 'force', width = 800, height = 600 } = options;
 
     try {
       const layout = this.layouts[type] || this.layouts.force;
-      return await layout.call(this, nodes, edges, { width, height, padding });
+      return await layout(nodes, edges, { width, height });
     } catch (error) {
-      logger.error('Failed to calculate graph layout:', error);
-      throw error;
+      logger.error(`Failed to calculate ${type} layout:`, error);
+      // Fallback to force layout
+      return this.forceLayout(nodes, edges, { width, height });
     }
   }
 
-  async forceLayout(nodes, edges, options) {
+  async forceLayout(nodes, edges, { width, height }) {
     const simulation = d3.forceSimulation(nodes)
       .force('link', d3.forceLink(edges).id(d => d.id))
       .force('charge', d3.forceManyBody().strength(-100))
-      .force('center', d3.forceCenter(options.width / 2, options.height / 2))
-      .stop();
+      .force('center', d3.forceCenter(width / 2, height / 2));
 
     // Run simulation synchronously
-    for (let i = 0; i < 300; ++i) simulation.tick();
-    
-    return { nodes, edges };
+    simulation.tick(300);
+    simulation.stop();
+
+    return {
+      nodes: nodes.map(node => ({
+        ...node,
+        x: Math.max(0, Math.min(width, node.x)),
+        y: Math.max(0, Math.min(height, node.y))
+      })),
+      edges
+    };
   }
 
-  async radialLayout(nodes, edges, options) {
-    const radius = Math.min(options.width, options.height) / 2 - options.padding;
+  async radialLayout(nodes, edges, { width, height }) {
+    const radius = Math.min(width, height) / 2 - 50;
     const angleStep = (2 * Math.PI) / nodes.length;
 
     nodes.forEach((node, i) => {
-      node.x = options.width/2 + radius * Math.cos(i * angleStep);
-      node.y = options.height/2 + radius * Math.sin(i * angleStep);
+      node.x = width/2 + radius * Math.cos(i * angleStep);
+      node.y = height/2 + radius * Math.sin(i * angleStep);
     });
 
     return { nodes, edges };
   }
 
-  async hierarchicalLayout(nodes, edges, options) {
-    const hierarchy = d3.stratify()
-      .id(d => d.id)
-      .parentId(d => this.findParent(d, edges))(nodes);
+  async hierarchicalLayout(nodes, edges, { width, height }) {
+    const hierarchy = this.createHierarchy(nodes, edges);
+    const treeLayout = d3.tree().size([width, height]);
+    const root = treeLayout(hierarchy);
 
-    const treeLayout = d3.tree()
-      .size([options.width - options.padding * 2, options.height - options.padding * 2]);
+    // Convert back to our format
+    return {
+      nodes: root.descendants().map(d => ({
+        ...d.data,
+        x: d.x,
+        y: d.y
+      })),
+      edges: root.links().map(d => ({
+        source: d.source.data.id,
+        target: d.target.data.id
+      }))
+    };
+  }
 
-    const tree = treeLayout(hierarchy);
+  createHierarchy(nodes, edges) {
+    // Find root node (node with no incoming edges)
+    const hasIncoming = new Set(edges.map(e => e.target));
+    const rootId = nodes.find(n => !hasIncoming.has(n.id))?.id || nodes[0]?.id;
 
-    // Convert back to flat structure
-    nodes.forEach(node => {
-      const treeNode = tree.find(n => n.id === node.id);
-      if (treeNode) {
-        node.x = treeNode.x + options.padding;
-        node.y = treeNode.y + options.padding;
+    // Create hierarchy data
+    const nodeMap = new Map(nodes.map(n => [n.id, { ...n, children: [] }]));
+    edges.forEach(edge => {
+      const parent = nodeMap.get(edge.source);
+      const child = nodeMap.get(edge.target);
+      if (parent && child) {
+        parent.children.push(child);
       }
     });
 
-    return { nodes, edges };
-  }
-
-  findParent(node, edges) {
-    const edge = edges.find(e => e.target.id === node.id);
-    return edge ? edge.source.id : null;
+    return d3.hierarchy(nodeMap.get(rootId));
   }
 }
 

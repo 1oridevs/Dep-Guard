@@ -7,50 +7,69 @@ const execPromise = util.promisify(exec);
 const CLI_PATH = path.resolve(__dirname, '../../src/index.js');
 
 describe('End-to-End Workflows', () => {
-  const testProjectPath = path.join(__dirname, '../fixtures/test-project');
-  
+  const testProjectDir = path.join(__dirname, '../fixtures/test-project');
+  const reportsDir = path.join(testProjectDir, 'reports');
+
   beforeAll(async () => {
-    // Ensure test project directory exists
-    await fs.mkdir(testProjectPath, { recursive: true });
-    await fs.mkdir(path.join(testProjectPath, 'reports'), { recursive: true });
-    
-    // Create package.json
+    // Create test project structure
+    await fs.mkdir(testProjectDir, { recursive: true });
+    await fs.mkdir(reportsDir, { recursive: true });
+
+    // Create test package.json
     await fs.writeFile(
-      path.join(testProjectPath, 'package.json'),
+      path.join(testProjectDir, 'package.json'),
       JSON.stringify({
         name: 'test-project',
+        version: '1.0.0',
         dependencies: {
-          'chalk': '^4.1.2',
-          'axios': '^1.6.0'
+          'lodash': '^4.17.21',
+          'chalk': '^4.1.2'
+        },
+        devDependencies: {
+          'jest': '^27.0.0'
         }
       }, null, 2)
     );
+
+    // Create node_modules to simulate installed dependencies
+    await fs.mkdir(path.join(testProjectDir, 'node_modules'), { recursive: true });
   });
 
   afterAll(async () => {
-    await fs.rm(testProjectPath, { recursive: true, force: true });
+    try {
+      await fs.rm(testProjectDir, { recursive: true, force: true });
+    } catch (error) {
+      console.error('Cleanup failed:', error);
+    }
   });
 
-  it('Full analysis workflow', async () => {
-    // Run analyze command
-    const { stdout: analyzeOutput } = await execPromise(`node ${CLI_PATH} analyze --json`, {
-      cwd: testProjectPath
+  beforeEach(async () => {
+    // Clean reports directory before each test
+    const files = await fs.readdir(reportsDir);
+    await Promise.all(
+      files.map(file => fs.unlink(path.join(reportsDir, file)))
+    );
+  });
+
+  it('should analyze dependencies and generate valid JSON output', async () => {
+    const { stdout } = await execPromise(`node ${CLI_PATH} analyze --json`, {
+      cwd: testProjectDir
     });
+
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    const result = JSON.parse(stdout);
+    expect(result).toHaveProperty('summary');
+    expect(result).toHaveProperty('dependencies');
+    expect(Array.isArray(result.dependencies)).toBe(true);
+  });
+
+  it('should generate and save analysis report', async () => {
+    const reportPath = path.join(reportsDir, 'analysis.json');
     
-    expect(() => JSON.parse(analyzeOutput)).not.toThrow();
-    const analysisResult = JSON.parse(analyzeOutput);
-    expect(analysisResult).toHaveProperty('dependencies');
-    expect(analysisResult).toHaveProperty('summary');
-  });
-
-  it('Report generation workflow', async () => {
-    const reportsDir = path.join(testProjectPath, 'reports');
-    const reportPath = path.join(reportsDir, 'report.json');
-
-    // Generate report
-    await execPromise(`node ${CLI_PATH} analyze --json --output ${reportPath}`, {
-      cwd: testProjectPath
-    });
+    await execPromise(
+      `node ${CLI_PATH} analyze --json --output ${reportPath}`,
+      { cwd: testProjectDir }
+    );
 
     // Verify report exists and is valid JSON
     const reportContent = await fs.readFile(reportPath, 'utf8');
@@ -58,5 +77,75 @@ describe('End-to-End Workflows', () => {
     const report = JSON.parse(reportContent);
     expect(report).toHaveProperty('summary');
     expect(report).toHaveProperty('dependencies');
+  });
+
+  it('should handle scan command with security checks', async () => {
+    const { stdout } = await execPromise(`node ${CLI_PATH} scan --json`, {
+      cwd: testProjectDir
+    });
+
+    const result = JSON.parse(stdout);
+    expect(result).toHaveProperty('security');
+    expect(result).toHaveProperty('licenses');
+  });
+
+  it('should run full workflow with multiple commands', async () => {
+    // Run sequence of commands
+    const commands = [
+      'analyze --json',
+      'scan --json',
+      'audit --json',
+      'tree --json'
+    ];
+
+    for (const cmd of commands) {
+      const { stdout } = await execPromise(`node ${CLI_PATH} ${cmd}`, {
+        cwd: testProjectDir
+      });
+
+      // Verify each command produces valid JSON
+      expect(() => JSON.parse(stdout)).not.toThrow();
+      const result = JSON.parse(stdout);
+      expect(result).toBeTruthy();
+    }
+  });
+
+  it('should handle errors gracefully', async () => {
+    // Test with invalid project
+    const invalidDir = path.join(__dirname, '../fixtures/invalid-project');
+    await fs.mkdir(invalidDir, { recursive: true });
+
+    try {
+      await execPromise(`node ${CLI_PATH} analyze`, {
+        cwd: invalidDir
+      });
+      fail('Should have thrown an error');
+    } catch (error) {
+      expect(error.message).toContain('Error');
+    } finally {
+      await fs.rm(invalidDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should respect concurrent operations', async () => {
+    // Run multiple commands concurrently
+    const commands = [
+      'analyze --json',
+      'scan --json',
+      'audit --json'
+    ];
+
+    const results = await Promise.all(
+      commands.map(cmd => 
+        execPromise(`node ${CLI_PATH} ${cmd}`, {
+          cwd: testProjectDir
+        })
+      )
+    );
+
+    // Verify all commands completed successfully
+    results.forEach(({ stdout }) => {
+      expect(() => JSON.parse(stdout)).not.toThrow();
+    });
   });
 }); 
