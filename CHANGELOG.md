@@ -134,3 +134,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved error handling in network requests
 - Fixed timeout issues in dependency scanning
 - Fixed package.json validation
+
+
+## [1.1.3] - 2025-03-22
+
+### Added
+- Added new commands
+- Added new features
+- Added new fixes

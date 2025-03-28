@@ -1,49 +1,120 @@
-const fs = require('fs').promises;
-const path = require('path');
+const webpack = require('webpack');
 const { execSync } = require('child_process');
 const logger = require('../../utils/logger');
 const cache = require('../../utils/cache');
+const bundleAnalyzer = require('./bundle-analyzer');
 
 class PerformanceAnalyzer {
   constructor() {
     this.cache = cache;
     this.metrics = {
-      loadTime: this.measureLoadTime,
-      memoryUsage: this.measureMemoryUsage,
-      bundleSize: this.analyzeBundleSize,
-      importCost: this.analyzeImportCost,
-      runtimeMetrics: this.collectRuntimeMetrics
+      bundleSize: 0,
+      loadTime: 0,
+      memoryUsage: 0,
+      treeShaking: 0,
+      runtimeScore: 0
     };
   }
 
-  async analyze(packageName, options = {}) {
-    const cacheKey = `perf:${packageName}`;
+  async analyzePackage(name, version) {
+    const cacheKey = `perf:${name}@${version}`;
     const cached = this.cache.get(cacheKey);
-    if (cached && !options.noCache) return cached;
+    if (cached) return cached;
 
     try {
       const results = {
-        name: packageName,
-        timestamp: new Date().toISOString(),
-        metrics: {}
+        name,
+        version,
+        bundleMetrics: await this.analyzeBundleImpact(name, version),
+        runtimeMetrics: await this.analyzeRuntime(name, version),
+        memoryMetrics: await this.analyzeMemoryUsage(name, version),
+        loadTimeMetrics: await this.analyzeLoadTime(name, version),
+        treeShakingMetrics: await this.analyzeTreeShaking(name, version),
+        score: 0
       };
 
-      // Run all metrics collection
-      for (const [name, collector] of Object.entries(this.metrics)) {
-        try {
-          results.metrics[name] = await collector.call(this, packageName);
-        } catch (error) {
-          logger.debug(`Failed to collect ${name} metrics:`, error);
-          results.metrics[name] = { error: error.message };
-        }
-      }
-
+      results.score = this.calculatePerformanceScore(results);
       this.cache.set(cacheKey, results);
       return results;
     } catch (error) {
-      logger.error('Performance analysis failed:', error);
+      logger.error(`Performance analysis failed for ${name}@${version}:`, error);
       throw error;
     }
+  }
+
+  async analyzeBundleImpact(name, version) {
+    const bundleStats = await bundleAnalyzer.analyzeBundleSize(name, version);
+    return {
+      rawSize: bundleStats.size,
+      gzipSize: bundleStats.gzip,
+      sizeImpact: await this.calculateSizeImpact(bundleStats),
+      unusedExports: await this.findUnusedExports(name, version),
+      treeShakenSize: await this.calculateTreeShakenSize(bundleStats)
+    };
+  }
+
+  async analyzeRuntime(name, version) {
+    const benchmarks = await this.runBenchmarks(name, version);
+    return {
+      initTime: benchmarks.initialization,
+      methodCallTime: benchmarks.methodCalls,
+      gcPauses: benchmarks.gcMetrics,
+      cpuUsage: benchmarks.cpuMetrics,
+      asyncPerformance: benchmarks.asyncMetrics
+    };
+  }
+
+  async analyzeMemoryUsage(name, version) {
+    const memoryStats = await this.collectMemoryStats(name, version);
+    return {
+      heapUsage: memoryStats.heap,
+      leakPotential: memoryStats.leaks,
+      gcFrequency: memoryStats.gcFreq,
+      retainedSize: memoryStats.retained,
+      allocationRate: memoryStats.allocRate
+    };
+  }
+
+  async analyzeLoadTime(name, version) {
+    const loadStats = await this.measureLoadTime(name, version);
+    return {
+      importTime: loadStats.import,
+      requireTime: loadStats.require,
+      initializationTime: loadStats.init,
+      firstCallTime: loadStats.firstCall
+    };
+  }
+
+  async analyzeTreeShaking(name, version) {
+    const treeShakingStats = await this.analyzeModuleUsage(name, version);
+    return {
+      deadCode: treeShakingStats.deadCode,
+      unusedExports: treeShakingStats.unusedExports,
+      sideEffects: treeShakingStats.sideEffects,
+      optimizationLevel: treeShakingStats.optimization
+    };
+  }
+
+  calculatePerformanceScore(results) {
+    const weights = {
+      bundle: 0.3,
+      runtime: 0.25,
+      memory: 0.2,
+      loadTime: 0.15,
+      treeShaking: 0.1
+    };
+
+    const scores = {
+      bundle: this.scoreBundleMetrics(results.bundleMetrics),
+      runtime: this.scoreRuntimeMetrics(results.runtimeMetrics),
+      memory: this.scoreMemoryMetrics(results.memoryMetrics),
+      loadTime: this.scoreLoadTimeMetrics(results.loadTimeMetrics),
+      treeShaking: this.scoreTreeShaking(results.treeShakingMetrics)
+    };
+
+    return Object.entries(weights).reduce((total, [key, weight]) => {
+      return total + (scores[key] * weight);
+    }, 0);
   }
 
   async measureLoadTime(packageName) {
